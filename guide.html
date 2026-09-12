@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#1d4ed8">
+<title>交接班留言板手冊</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@500;700&family=Noto+Sans+TC:wght@400;500;700&display=swap">
+<style>
+:root{
+  --paper:#f5f6f8;
+  --surface:#ffffff;
+  --ink:#141a24;
+  --ink-2:#4a5364;
+  --ink-3:#8b93a3;
+  --rule:#dfe3ea;
+  --rule-soft:#eceff4;
+  --accent:#1d4ed8;
+  --accent-soft:#eaeffc;
+  --hold:#b45309;
+  --hold-soft:#fdf3e3;
+  --good:#047857;
+  --good-soft:#e7f5ef;
+  --bad:#b91c1c;
+  --bad-soft:#fdeceb;
+  --serif:"Noto Serif TC",Georgia,"Songti TC",serif;
+  --sans:"Noto Sans TC",-apple-system,"Segoe UI",system-ui,sans-serif;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#12161d; --surface:#1a1f28; --ink:#eceef2; --ink-2:#b0b8c6; --ink-3:#7c8593;
+    --rule:#2c333f; --rule-soft:#232932;
+    --accent:#8aa9f5; --accent-soft:#1e2740;
+    --hold:#e0a45c; --hold-soft:#2e2519;
+    --good:#57c79a; --good-soft:#172a23;
+    --bad:#f08a84; --bad-soft:#2e1b1b;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#12161d; --surface:#1a1f28; --ink:#eceef2; --ink-2:#b0b8c6; --ink-3:#7c8593;
+  --rule:#2c333f; --rule-soft:#232932;
+  --accent:#8aa9f5; --accent-soft:#1e2740;
+  --hold:#e0a45c; --hold-soft:#2e2519;
+  --good:#57c79a; --good-soft:#172a23;
+  --bad:#f08a84; --bad-soft:#2e1b1b;
+}
+*{box-sizing:border-box}
+body{
+  background:var(--paper); color:var(--ink);
+  font-family:var(--sans); font-size:16px; line-height:1.75;
+  padding:0 18px; padding-block:0 64px;
+}
+.wrap{max-width:640px;margin:0 auto}
+
+/* ── 抬頭 ── */
+header{padding-block:44px 30px;border-bottom:2px solid var(--ink)}
+.eyebrow{
+  font-size:12px;letter-spacing:.22em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:500;margin:0 0 14px;
+}
+h1{
+  font-family:var(--serif);font-weight:700;font-size:clamp(30px,8vw,42px);
+  line-height:1.2;margin:0;text-wrap:balance;letter-spacing:-.01em;
+}
+.stores{
+  display:flex;gap:10px;flex-wrap:wrap;align-items:center;
+  margin-top:16px;font-size:14px;color:var(--ink-2);
+}
+.stores b{
+  font-weight:500;background:var(--surface);border:1px solid var(--rule);
+  border-radius:999px;padding:4px 12px;
+}
+.url{
+  display:block;margin-top:20px;padding:13px 16px;background:var(--accent-soft);
+  border-radius:10px;color:var(--accent);font-weight:700;text-decoration:none;
+  font-size:15px;word-break:break-all;
+}
+.url span{display:block;font-size:12px;font-weight:400;color:var(--ink-2);letter-spacing:.02em}
+
+/* ── 區段 ── */
+section{padding-block:38px;border-bottom:1px solid var(--rule)}
+h2{
+  font-family:var(--serif);font-size:23px;font-weight:700;margin:0 0 6px;
+  letter-spacing:-.01em;text-wrap:balance;
+}
+.lede{color:var(--ink-2);margin:0 0 22px;font-size:15px}
+h3{font-size:16px;font-weight:700;margin:26px 0 8px}
+p{margin:0 0 14px}
+a{color:var(--accent)}
+
+/* ── 三種類型 ── */
+.types{display:grid;gap:12px}
+.type{
+  background:var(--surface);border:1px solid var(--rule);border-radius:12px;
+  padding:15px 17px;display:grid;grid-template-columns:auto 1fr;gap:4px 13px;align-items:baseline;
+}
+.type .n{
+  font-family:var(--serif);font-size:15px;font-weight:700;color:var(--accent);
+  background:var(--accent-soft);border-radius:7px;width:27px;height:27px;
+  display:grid;place-items:center;grid-row:span 2;align-self:start;
+}
+.type b{font-size:16px}
+.type i{font-style:normal;color:var(--ink-2);font-size:14px;line-height:1.6}
+
+/* ── 填寫欄位 ── */
+dl.fields{margin:0;display:grid;gap:2px}
+dl.fields div{
+  display:grid;grid-template-columns:112px 1fr;gap:12px;
+  padding:11px 0;border-top:1px solid var(--rule-soft);
+}
+dl.fields div:first-child{border-top:0}
+dl.fields dt{font-weight:500;color:var(--ink-2);font-size:14px}
+dl.fields dd{margin:0;font-size:15px}
+dl.fields code{
+  font-family:var(--sans);background:var(--rule-soft);border-radius:5px;
+  padding:1px 6px;font-size:14px;
+}
+
+/* ── 庫存三步 ── */
+.flow{display:grid;gap:0;margin:0 0 26px}
+.step{
+  display:grid;grid-template-columns:auto 1fr;gap:16px;
+  padding:18px 0;border-top:1px solid var(--rule-soft);
+}
+.step:first-child{border-top:0;padding-top:4px}
+.dot{
+  width:30px;height:30px;border-radius:50%;display:grid;place-items:center;
+  font-family:var(--serif);font-weight:700;font-size:15px;color:var(--surface);
+  background:var(--ink);align-self:start;
+}
+.step.hold .dot{background:var(--hold)}
+.step.out .dot{background:var(--good)}
+.step h4{margin:2px 0 4px;font-size:17px;font-family:var(--serif);font-weight:700}
+.step .when{font-size:13px;color:var(--ink-3);margin:0 0 10px}
+.deltas{display:grid;gap:5px;font-size:15px}
+.deltas div{display:flex;gap:10px;align-items:baseline}
+.deltas .lab{color:var(--ink-2);min-width:96px}
+.deltas .val{font-weight:700;font-variant-numeric:tabular-nums}
+.minus{color:var(--bad)}.plus{color:var(--hold)}.flat{color:var(--ink-3);font-weight:500}
+.out-val{color:var(--good)}
+
+/* ── 帳本表 ── */
+.ledger-wrap{overflow-x:auto;margin:0 0 14px;border:1px solid var(--rule);border-radius:12px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;min-width:440px;font-size:14px}
+th,td{padding:11px 12px;text-align:right;border-top:1px solid var(--rule-soft);white-space:nowrap}
+th:first-child,td:first-child{text-align:left;white-space:normal;min-width:118px}
+thead th{
+  border-top:0;font-size:12px;letter-spacing:.04em;color:var(--ink-3);font-weight:500;
+  background:var(--rule-soft);
+}
+tbody td{font-variant-numeric:tabular-nums}
+tr.mark{background:var(--hold-soft)}
+tr.mark td:first-child{font-weight:700;color:var(--hold)}
+tr.done{background:var(--good-soft)}
+tr.done td:first-child{font-weight:700;color:var(--good)}
+td.hi{font-weight:700}
+caption{
+  caption-side:bottom;text-align:left;padding:11px 13px;font-size:13px;
+  color:var(--ink-2);border-top:1px solid var(--rule-soft);
+}
+
+/* ── 為什麼 ── */
+.why{
+  background:var(--surface);border-left:3px solid var(--hold);border-radius:0 10px 10px 0;
+  padding:16px 18px;margin:22px 0 0;
+}
+.why b{display:block;font-family:var(--serif);font-size:16px;margin-bottom:5px}
+.why p{margin:0;font-size:15px;color:var(--ink-2)}
+
+/* ── 問答 ── */
+.qa{display:grid;gap:1px;background:var(--rule);border-radius:12px;overflow:hidden;border:1px solid var(--rule)}
+.qa>div{background:var(--surface);padding:16px 17px}
+.qa dt{font-weight:700;margin:0 0 5px;font-size:15px}
+.qa dd{margin:0;color:var(--ink-2);font-size:15px}
+.qa dd em{font-style:normal;color:var(--bad);font-weight:500}
+
+/* ── 提醒 ── */
+ul.tips{margin:0;padding:0;list-style:none;display:grid;gap:12px}
+ul.tips li{
+  display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:baseline;font-size:15px;
+}
+ul.tips .pill{
+  font-size:12px;font-weight:700;padding:3px 10px;border-radius:999px;white-space:nowrap;
+  background:var(--rule-soft);color:var(--ink-2);
+}
+ul.tips .pill.today{background:var(--hold-soft);color:var(--hold)}
+ul.tips .pill.late{background:var(--bad-soft);color:var(--bad)}
+footer{padding-block:30px 0;color:var(--ink-3);font-size:13px}
+@media(max-width:420px){
+  dl.fields div{grid-template-columns:1fr;gap:2px}
+  .deltas .lab{min-width:82px}
+}
+
+body{margin:0}
+.backbar{max-width:640px;margin:0 auto;padding-top:14px}
+.backbar a{
+  display:inline-flex;align-items:center;gap:6px;font-size:14px;text-decoration:none;
+  color:var(--ink-2);background:var(--surface);border:1px solid var(--rule);
+  border-radius:999px;padding:7px 14px;
+}
+</style>
+</head>
+<body>
+<div class="backbar"><a href="./">← 回工作留言板</a></div>
+<div class="wrap">
+<header>
+  <p class="eyebrow">永昇 · 門市交接班</p>
+  <h1>工作留言板<br>操作手冊</h1>
+  <div class="stores"><b>三重龍門</b><b>西門</b><span>兩店共用同一塊板子</span></div>
+  <a class="url" href="https://willinlee20.github.io/shop-board/">willinlee20.github.io/shop-board<span>用公司 Google 帳號登入 · 建議加到手機桌面</span></a>
+</header>
+
+<section>
+  <h2>留言板要做什麼</h2>
+  <p class="lede">交接班的時候，下一班的人只要打開這一頁，就知道所有還沒處理完的事。</p>
+  <div class="types">
+    <div class="type"><span class="n">一</span><b>客戶預訂單</b><i>客人預訂商品、約好哪天來拿。按下「確認取貨完成」會自動扣庫存。</i></div>
+    <div class="type"><span class="n">二</span><b>任務交接</b><i>任何要交接給下一班的事，空白自己打。</i></div>
+    <div class="type"><span class="n">三</span><b>例行工作</b><i>倒垃圾、盤點、清潔環境、擦玻璃這類提醒，勾選就好。</i></div>
+  </div>
+  <p style="margin-top:20px;color:var(--ink-2);font-size:15px">每一則留言都要選<b>對應門市</b>。畫面上方可以切換「全部門市／三重龍門／西門」，只看自己這一間。</p>
+</section>
+
+<section>
+  <h2>開一張預訂單</h2>
+  <p class="lede">右上角按「＋ 新增留言」，選「客戶預訂單」。</p>
+  <dl class="fields">
+    <div><dt>客戶名稱</dt><dd>建議寫「姓＋電話後四碼」，例如 <code>王先生 5678</code>，之後好找人。</dd></div>
+    <div><dt>客戶來源</dt><dd>店內 · 網路 · 親友</dd></div>
+    <div><dt>取貨日期</dt><dd>點日曆選。</dd></div>
+    <div><dt>取貨時段</dt><dd>13:00–15:00 · 15:00–17:00 · 17:00–19:00 · 19:00–22:00</dd></div>
+    <div><dt>預訂品項</dt><dd><b>先選「① 產品名稱」，再選「② 產品規格」</b>——兩層下拉，例如先選「小海豚 煙彈」，再選「0.4」。規格清單上會直接顯示<b>各店現有庫存</b>，選好後單價自動帶入售價。要訂第二樣按「＋ 增加品項」。</dd></div>
+    <div><dt>銷售價格</dt><dd>預設是售價，有折扣直接改數字，小計會自己算。</dd></div>
+    <div><dt>備註</dt><dd>客人交代的事，例如「要換殼」、「會晚一點到」。</dd></div>
+  </dl>
+  <p style="margin-top:20px;font-size:15px">送出前會跳一個確認視窗，<b>告訴你這張單會怎麼動庫存</b>。看過沒問題再按確定。</p>
+</section>
+
+<section>
+  <h2>庫存是怎麼算的</h2>
+  <p class="lede">一張預訂單從開單到取貨，庫存會動兩次。中間這段時間，貨放在庫存表的「預定專區」——意思是貨還在公司，但已經被客人訂走了，不能再賣給別人。</p>
+
+  <div class="flow">
+    <div class="step hold">
+      <span class="dot">1</span>
+      <div>
+        <h4>開單 — 把貨預留起來</h4>
+        <p class="when">按下「送出留言」的那一刻</p>
+        <div class="deltas">
+          <div><span class="lab">取貨門市</span><span class="val minus">− N</span><span style="color:var(--ink-3);font-size:14px">門市不夠的部分自動從總倉補</span></div>
+          <div><span class="lab">預定專區</span><span class="val plus">＋ N</span></div>
+          <div><span class="lab">總數</span><span class="val flat">不變</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="step out">
+      <span class="dot">2</span>
+      <div>
+        <h4>客人取貨 — 真正出貨</h4>
+        <p class="when">按下「✓ 確認取貨完成」</p>
+        <div class="deltas">
+          <div><span class="lab">預定專區</span><span class="val minus">− N</span></div>
+          <div><span class="lab">總數</span><span class="val out-val">− N</span><span style="color:var(--ink-3);font-size:14px">這時候庫存才真的減少</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="step">
+      <span class="dot">3</span>
+      <div>
+        <h4>客人不要了 — 原路還回去</h4>
+        <p class="when">按下「取消預訂」</p>
+        <div class="deltas">
+          <div><span class="lab">預定專區</span><span class="val minus">− N</span></div>
+          <div><span class="lab">門市／總倉</span><span class="val plus">＋ N</span><span style="color:var(--ink-3);font-size:14px">照當初扣的紀錄還回</span></div>
+          <div><span class="lab">總數</span><span class="val flat">回到開單前</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>實際跑一遍</h3>
+  <p style="font-size:15px">客人在<b>三重龍門</b>訂<b>酪梨寶寶煙彈 酪梨倉 0.7 × 5 個</b>。開單前：三重店 3、西門店 3、預定專區 0、總倉 6。</p>
+  <div class="ledger-wrap">
+  <table>
+    <caption>門市只有 3 個，不夠的 2 個自動從總倉調——但「總數 12」一直沒變，直到客人真的把貨帶走。</caption>
+    <thead><tr><th>時間點</th><th>三重店</th><th>西門店</th><th>預定專區</th><th>總倉</th><th>總數</th></tr></thead>
+    <tbody>
+      <tr><td>開單前</td><td>3</td><td>3</td><td>0</td><td>6</td><td>12</td></tr>
+      <tr class="mark"><td>① 開單後</td><td class="hi">0</td><td>3</td><td class="hi">5</td><td class="hi">4</td><td>12</td></tr>
+      <tr class="done"><td>② 客人取貨後</td><td>0</td><td>3</td><td class="hi">0</td><td>4</td><td class="hi">7</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="why">
+    <b>為什麼要繞這一圈？</b>
+    <p>因為貨其實還在店裡、還沒交給客人。如果開單就把總數扣掉，盤點的時候數量就對不起來了。放在「預定專區」可以讓大家一眼看出：這些貨已經有人訂了，不要賣掉。</p>
+  </div>
+</section>
+
+<section>
+  <h2>特殊狀況</h2>
+  <dl class="qa">
+    <div><dt>門市沒現貨，可以幫客人訂嗎？</dt>
+      <dd>可以。清單上會標「本店無現貨」，但還是選得到，系統會自動從<b>總倉</b>扣，等於跟倉庫調貨。</dd></div>
+    <div><dt>連總倉也不夠？</dt>
+      <dd>送出前的確認視窗會用 ⚠️ 警告你「庫存會變成負數」。這種情況請<b>先確認能不能跟廠商調到貨</b>再送出。負數的意思就是「已經賣掉但還沒進貨」。</dd></div>
+    <div><dt>不小心按錯「確認取貨完成」？</dt>
+      <dd><em>不要重複操作。</em>庫存已經扣掉了，請直接告知負責人手動調整，不要自己再開單來回沖。</dd></div>
+    <div><dt>卡片上出現「重試扣庫存」按鈕？</dt>
+      <dd>表示送出的時候網路斷了，庫存還沒扣成功。按那顆按鈕就好，<b>不會重複扣</b>。</dd></div>
+    <div><dt>同一樣東西在同一張單選了兩次？</dt>
+      <dd>沒問題，系統會自動合計再扣。</dd></div>
+  </dl>
+</section>
+
+<section style="border-bottom:0">
+  <h2>幾個小提醒</h2>
+  <ul class="tips">
+    <li><span class="pill">45 秒</span><span>留言板會自動更新。想馬上看最新的，按右上角「↻ 更新」。</span></li>
+    <li><span class="pill">排序</span><span>「待取貨預訂單」是照取貨時間從最早排到最晚，<b>最上面那張就是最急的</b>。</span></li>
+    <li><span class="pill today">今天取貨</span><span>當天要來拿的單會標這個記號。</span></li>
+    <li><span class="pill late">已過取貨日</span><span>過了取貨日還沒處理的會變紅字，看到請打電話跟客人確認。</span></li>
+    <li><span class="pill">紀錄</span><span>每則留言都會記下是誰留的、誰處理的。這不是要抓人，是交接時能找對人問清楚。</span></li>
+  </ul>
+</section>
+
+<footer>資料直接寫進「進銷存總表」的「留言板」與「Products產品」工作表。有任何對不起來的數字，請找負責人。</footer>
+</div>
+</body>
+</html>

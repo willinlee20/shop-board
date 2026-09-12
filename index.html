@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>工作留言板｜三重龍門 × 西門</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f1f5f9; --card:#ffffff; --ink:#0f172a; --ink-2:#475569; --ink-3:#94a3b8;
+  --line:#e2e8f0; --brand:#1d4ed8; --brand-soft:#eef2ff;
+  --ok:#059669; --ok-soft:#ecfdf5; --warn:#d97706; --warn-soft:#fffbeb;
+  --bad:#dc2626; --bad-soft:#fef2f2; --violet:#7c3aed; --violet-soft:#f5f3ff;
+  --r:14px; --shadow:0 1px 2px rgba(15,23,42,.06),0 8px 24px -12px rgba(15,23,42,.12);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--ink);
+  font-family:"Noto Sans TC",-apple-system,"Segoe UI",system-ui,sans-serif;
+  font-size:15px; line-height:1.6; -webkit-text-size-adjust:100%;
+}
+button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit}
+.hidden{display:none!important}
+
+/* ---------- 頂部 ---------- */
+header{
+  position:sticky; top:0; z-index:50; background:#fff;
+  border-bottom:1px solid var(--line);
+}
+.head-in{
+  max-width:1040px; margin:0 auto; padding:10px 16px;
+  display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+}
+.logo{display:flex;align-items:center;gap:10px;margin-right:auto}
+.logo-mark{
+  width:34px;height:34px;border-radius:10px;background:var(--brand);color:#fff;
+  display:grid;place-items:center;font-weight:700;font-size:16px;flex:0 0 auto;
+}
+.logo h1{font-size:17px;margin:0;line-height:1.2}
+.logo p{margin:0;font-size:12px;color:var(--ink-3)}
+.who{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-2)}
+.avatar{width:28px;height:28px;border-radius:50%;background:var(--line)}
+
+.btn{
+  border:1px solid var(--line); background:#fff; border-radius:10px;
+  padding:9px 14px; font-weight:500; cursor:pointer; white-space:nowrap;
+  transition:.15s; display:inline-flex; align-items:center; gap:6px; text-decoration:none;
+}
+.btn:hover{background:#f8fafc}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn-primary{background:var(--brand);border-color:var(--brand);color:#fff}
+.btn-primary:hover{background:#1a44bd}
+.btn-ok{background:var(--ok);border-color:var(--ok);color:#fff}
+.btn-ok:hover{background:#047857}
+.btn-ghost{background:transparent;border-color:transparent;color:var(--ink-2);padding:8px 10px}
+.btn-ghost:hover{background:#f1f5f9}
+.btn-sm{padding:6px 10px;font-size:13px;border-radius:9px}
+.btn-danger{color:var(--bad);border-color:#fecaca;background:#fff}
+.btn-danger:hover{background:var(--bad-soft)}
+
+/* ---------- 版面 ---------- */
+main{max-width:1040px;margin:0 auto;padding:16px 16px 80px}
+.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.seg{display:flex;background:#fff;border:1px solid var(--line);border-radius:11px;padding:3px;gap:2px}
+.seg button{border:0;background:transparent;padding:7px 13px;border-radius:8px;cursor:pointer;font-weight:500;color:var(--ink-2)}
+.seg button.on{background:var(--brand);color:#fff}
+.spacer{margin-left:auto}
+.count-pill{background:#fff;border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:13px;color:var(--ink-2)}
+
+/* ---------- 卡片 ---------- */
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);margin-bottom:12px;overflow:hidden}
+.card-top{display:flex;gap:10px;align-items:flex-start;padding:14px 16px 0}
+.tag{font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;white-space:nowrap}
+.tag-order{background:var(--brand-soft);color:var(--brand)}
+.tag-task{background:var(--violet-soft);color:var(--violet)}
+.tag-routine{background:var(--warn-soft);color:var(--warn)}
+.tag-store{background:#f1f5f9;color:var(--ink-2);font-weight:500}
+.tag-done{background:var(--ok-soft);color:var(--ok)}
+.tag-cancel{background:#f1f5f9;color:var(--ink-3)}
+.tag-alert{background:var(--bad-soft);color:var(--bad)}
+.card-title{font-weight:700;font-size:16px;margin:0;flex:1 1 auto;min-width:0}
+.card-body{padding:10px 16px 14px}
+.kv{display:grid;grid-template-columns:88px 1fr;gap:4px 10px;font-size:14px}
+.kv dt{color:var(--ink-3)}
+.kv dd{margin:0}
+.items{margin:12px 0 0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.items .it{display:flex;gap:8px;padding:8px 12px;font-size:14px;border-top:1px solid var(--line)}
+.items .it:first-child{border-top:0}
+.items .it b{font-weight:500;flex:1 1 auto}
+.items .sum{background:#f8fafc;font-weight:700;justify-content:flex-end;gap:14px}
+.card-foot{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px 16px;background:#f8fafc;border-top:1px solid var(--line)}
+.meta{font-size:12px;color:var(--ink-3);margin-right:auto}
+.card.is-done{opacity:.72}
+.note{background:var(--warn-soft);border:1px solid #fde68a;color:#92400e;border-radius:10px;padding:8px 12px;font-size:13px;margin-top:10px}
+.note.bad{background:var(--bad-soft);border-color:#fecaca;color:#991b1b}
+.empty{text-align:center;color:var(--ink-3);padding:48px 16px;background:#fff;border:1px dashed var(--line);border-radius:var(--r)}
+.sec-title{font-size:13px;font-weight:700;color:var(--ink-3);letter-spacing:.04em;margin:22px 0 10px}
+
+/* ---------- 表單 ---------- */
+.modal{position:fixed;inset:0;z-index:100;background:rgba(15,23,42,.45);display:flex;align-items:flex-end;justify-content:center;padding:0}
+@media(min-width:640px){.modal{align-items:center;padding:24px}}
+.sheet{background:#fff;width:100%;max-width:620px;max-height:94vh;overflow:auto;border-radius:18px 18px 0 0}
+@media(min-width:640px){.sheet{border-radius:18px}}
+.sheet-head{position:sticky;top:0;background:#fff;border-bottom:1px solid var(--line);padding:14px 18px;display:flex;align-items:center;gap:10px}
+.sheet-head h2{margin:0;font-size:17px;flex:1}
+.sheet-body{padding:16px 18px}
+.sheet-foot{position:sticky;bottom:0;background:#fff;border-top:1px solid var(--line);padding:12px 18px;display:flex;gap:10px}
+.sheet-foot .btn{flex:1;justify-content:center;padding:12px}
+.field{margin-bottom:14px}
+.field>label{display:block;font-size:13px;font-weight:500;color:var(--ink-2);margin-bottom:6px}
+.field .req{color:var(--bad)}
+input[type=text],input[type=date],input[type=number],select,textarea{
+  width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;
+}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--brand);outline-offset:-1px;border-color:var(--brand)}
+textarea{min-height:84px;resize:vertical}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{border:1px solid var(--line);background:#fff;border-radius:10px;padding:9px 14px;cursor:pointer}
+.chip.on{border-color:var(--brand);background:var(--brand-soft);color:var(--brand);font-weight:500}
+.checks{display:grid;gap:8px}
+.check{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line);border-radius:10px;padding:11px 13px;cursor:pointer}
+.check.on{border-color:var(--brand);background:var(--brand-soft)}
+.check input{margin-top:4px;width:18px;height:18px;flex:0 0 auto;accent-color:var(--brand)}
+
+/* 品項列 */
+.item-row{border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px;background:#fbfcfe}
+.item-row .r2{display:flex;gap:8px;margin-top:8px;align-items:flex-end}
+.item-row .r2 .f{flex:1}
+.item-row .r2 label{display:block;font-size:12px;color:var(--ink-3);margin-bottom:4px}
+.item-row .del{border:0;background:transparent;color:var(--bad);cursor:pointer;padding:10px}
+.stockline{font-size:12px;color:var(--ink-3);margin-top:6px}
+.stockline b{color:var(--ink-2);font-weight:500}
+.stockline.short{color:var(--warn)}
+.item-row .two{display:grid;gap:9px}
+.item-row .two .f{min-width:0}
+.item-row label{display:block;font-size:12px;color:var(--ink-3);margin-bottom:4px}
+.item-row select{appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--ink-3) 50%),linear-gradient(135deg,var(--ink-3) 50%,transparent 50%);background-position:calc(100% - 18px) 50%,calc(100% - 13px) 50%;background-size:5px 5px,5px 5px;background-repeat:no-repeat;padding-right:34px}
+.item-row select:disabled{background-color:#f8fafc;color:var(--ink-3)}
+.add-item{width:100%;justify-content:center;border-style:dashed;padding:11px}
+.total-bar{display:flex;justify-content:space-between;align-items:center;background:var(--brand-soft);border-radius:10px;padding:11px 14px;font-weight:700;color:var(--brand);margin-top:4px}
+
+/* ---------- 登入 / 載入 ---------- */
+.gate{min-height:100vh;display:grid;place-items:center;padding:24px}
+.gate-box{background:#fff;border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);padding:34px 28px;max-width:400px;text-align:center}
+.gate-box .logo-mark{width:52px;height:52px;font-size:22px;margin:0 auto 16px;border-radius:15px}
+.gate-box h1{font-size:20px;margin:0 0 6px}
+.gate-box p{color:var(--ink-2);font-size:14px;margin:0 0 22px}
+.gate-box .btn{width:100%;justify-content:center;padding:12px}
+.err{background:var(--bad-soft);border:1px solid #fecaca;color:#991b1b;border-radius:10px;padding:11px 13px;font-size:13px;margin-bottom:16px;text-align:left;white-space:pre-wrap}
+.loading{display:grid;place-items:center;padding:60px 20px;color:var(--ink-3);gap:12px}
+.spin{width:26px;height:26px;border:3px solid var(--line);border-top-color:var(--brand);border-radius:50%;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.toast{
+  position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:200;
+  background:var(--ink);color:#fff;padding:12px 18px;border-radius:12px;font-size:14px;
+  box-shadow:var(--shadow);max-width:90vw;text-align:center;
+}
+.toast.bad{background:var(--bad)}
+.toast.ok{background:var(--ok)}
+#newBtnTop{font-weight:700}
+</style>
+</head>
+<body>
+
+<!-- 登入畫面 -->
+<div id="gate" class="gate">
+  <div class="gate-box">
+    <div class="logo-mark">板</div>
+    <h1>工作留言板</h1>
+    <p>三重龍門 × 西門　交接班 / 客戶預訂 / 例行工作</p>
+    <div id="gateErr" class="err hidden"></div>
+    <button id="loginBtn" class="btn btn-primary">使用 Google 帳號登入</button>
+    <p style="margin:16px 0 0;font-size:12px;color:var(--ink-3)">請使用有「進銷存總表」權限的公司帳號</p>
+  </div>
+</div>
+
+<!-- 主畫面 -->
+<div id="app" class="hidden">
+  <header>
+    <div class="head-in">
+      <div class="logo">
+        <div class="logo-mark">板</div>
+        <div>
+          <h1>工作留言板</h1>
+          <p id="subhead">三重龍門 × 西門</p>
+        </div>
+      </div>
+      <div class="who">
+        <img id="uAvatar" class="avatar" alt="">
+        <span id="uName"></span>
+      </div>
+      <button id="refreshBtn" class="btn btn-sm" title="重新整理">↻ 更新</button>
+      <button id="newBtnTop" class="btn btn-primary btn-sm">＋ 新增留言</button>
+      <a class="btn btn-ghost btn-sm" href="guide.html" target="_blank" rel="noopener">操作說明</a>
+      <button id="logoutBtn" class="btn btn-ghost btn-sm">登出</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="toolbar">
+      <div class="seg" id="storeSeg">
+        <button data-store="全部" class="on">全部門市</button>
+        <button data-store="三重龍門">三重龍門</button>
+        <button data-store="西門">西門</button>
+      </div>
+      <span class="spacer"></span>
+      <span class="count-pill" id="pendingCount">待處理 0</span>
+    </div>
+
+    <div id="loadingBox" class="loading"><div class="spin"></div><span>正在讀取留言板與庫存…</span></div>
+    <div id="listWrap"></div>
+  </main>
+</div>
+
+<div id="modalHost"></div>
+<div id="toastHost"></div>
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="app.js"></script>
+</body>
+</html>
