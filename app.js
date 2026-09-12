@@ -109,35 +109,66 @@ function toast(msg, kind) {
 
 /* ----------------------------- 登入 ------------------------------------ */
 let tokenClient = null;
+const SCOPE_SHEETS = 'https://www.googleapis.com/auth/spreadsheets';
+const SCOPES = SCOPE_SHEETS +
+  ' https://www.googleapis.com/auth/userinfo.email' +
+  ' https://www.googleapis.com/auth/userinfo.profile';
 
 function initAuth() {
   tokenClient = google.accounts.oauth2.initTokenClient({
     client_id: CONFIG.CLIENT_ID,
-    scope: 'https://www.googleapis.com/auth/spreadsheets ' +
-           'https://www.googleapis.com/auth/userinfo.email ' +
-           'https://www.googleapis.com/auth/userinfo.profile',
+    scope: SCOPES,
     callback: resp => {
       if (resp.error || !resp.access_token) {
         gateError('登入沒有完成：' + (resp.error_description || resp.error || '未知原因'));
+        $('loginBtn').disabled = false;
         return;
       }
+
+      // 必須真的拿到「試算表」權限，否則後面讀寫會被 Google 擋掉
+      const hasSheets = !google.accounts.oauth2.hasGrantedAllScopes
+        || google.accounts.oauth2.hasGrantedAllScopes(resp, SCOPE_SHEETS);
+      if (!hasSheets) {
+        if (!S.consentTried) {                      // 第一次遇到 → 強制跳出同意畫面再要一次
+          S.consentTried = true;
+          gateError('需要你授權「Google 試算表」的存取權，請在接下來的畫面按「繼續 / 允許」。');
+          setTimeout(() => tokenClient.requestAccessToken({ prompt: 'consent' }), 400);
+          return;
+        }
+        gateError('這次登入沒有授權到 Google 試算表的權限，所以讀不到庫存。\n\n'
+          + '請再按一次登入，在 Google 的畫面上把「查看、編輯、建立及刪除你所有的 Google 試算表」勾起來，再按「繼續」。');
+        $('loginBtn').disabled = false;
+        return;
+      }
+
       S.token = resp.access_token;
+      S.scope = resp.scope || '';
       S.tokenExp = Date.now() + (Number(resp.expires_in || 3600) - 120) * 1000;
-      sessionStorage.setItem('sb_tok', JSON.stringify({ t: S.token, e: S.tokenExp }));
+      sessionStorage.setItem('sb_tok', JSON.stringify({ t: S.token, e: S.tokenExp, s: S.scope }));
       afterLogin();
     }
   });
 
-  // 這個分頁之前登入過就直接進去
+  // 這個分頁之前登入過、而且權限是完整的，就直接進去
   try {
     const c = JSON.parse(sessionStorage.getItem('sb_tok') || 'null');
-    if (c && c.e > Date.now() + 60000) { S.token = c.t; S.tokenExp = c.e; afterLogin(); return; }
+    if (c && c.e > Date.now() + 60000 && String(c.s || '').includes('spreadsheets')) {
+      S.token = c.t; S.tokenExp = c.e; S.scope = c.s; afterLogin(); return;
+    }
   } catch (e) { /* ignore */ }
 
   $('loginBtn').disabled = false;
 }
 
 function login() { gateError(null); tokenClient.requestAccessToken({ prompt: '' }); }
+
+/** 重新授權：清掉舊 token，強制跳出 Google 同意畫面 */
+function reauth() {
+  sessionStorage.removeItem('sb_tok');
+  S.consentTried = true;
+  S.token = null;
+  tokenClient.requestAccessToken({ prompt: 'consent' });
+}
 
 function logout() {
   sessionStorage.removeItem('sb_tok');
@@ -169,7 +200,9 @@ async function afterLogin() {
     $('loadingBox').classList.add('hidden');
     $('listWrap').innerHTML =
       `<div class="empty"><b style="color:var(--bad)">讀取失敗</b><br><br>
-       <span style="font-size:13px;white-space:pre-wrap">${esc(err.message)}</span></div>`;
+       <span style="font-size:13px;white-space:pre-wrap">${esc(err.message)}</span>
+       ${err.needAuth ? `<br><br><button class="btn btn-primary" onclick="reauth()">重新授權 Google 試算表</button>` : ''}
+       </div>`;
   }
 }
 
@@ -197,7 +230,17 @@ async function api(path, opts = {}, retry = true) {
   if (!r.ok) {
     let detail = '';
     try { const j = await r.json(); detail = j.error && j.error.message ? j.error.message : ''; } catch (e) {}
-    if (r.status === 403) throw new Error('沒有權限存取這份試算表。\n請確認 ' + (S.user?.email || '此帳號') + ' 已被加入「進銷存總表」的編輯者。\n\n' + detail);
+    if (r.status === 403) {
+      if (/insufficient authentication scopes|SCOPE_INSUFFICIENT|ACCESS_TOKEN_SCOPE/i.test(detail)) {
+        sessionStorage.removeItem('sb_tok');
+        const e = new Error('登入時沒有授權到「Google 試算表」的存取權，所以讀不到庫存。\n'
+          + '（這不是試算表權限的問題，是 Google 登入範圍的問題）\n\n'
+          + '請按下面的按鈕重新授權，並在 Google 畫面上按「繼續 / 允許」。');
+        e.needAuth = true;
+        throw e;
+      }
+      throw new Error('這個 Google 帳號沒有存取這份試算表的權限。\n請確認 ' + (S.user?.email || '此帳號') + ' 已被加入「進銷存總表」的編輯者。\n\n' + detail);
+    }
     if (r.status === 404) throw new Error('找不到試算表，請檢查 app.js 的 SPREADSHEET_ID。\n\n' + detail);
     throw new Error(`Google Sheets 回應錯誤（${r.status}）\n${detail}`);
   }
