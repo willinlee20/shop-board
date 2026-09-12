@@ -54,10 +54,11 @@ const BOARD_HEADERS = [
   'id', '類型', '建立時間', '建立者', '門市', '狀態',
   '客戶名稱', '客戶來源', '取貨日期', '取貨時段',
   '品項明細', '金額', '備註', '例行工作項目',
-  '完成時間', '完成者', '品項JSON', '庫存異動JSON', '庫存狀態'
+  '完成時間', '完成者', '品項JSON', '庫存異動JSON', '庫存狀態',
+  '最後修改時間', '最後修改者', '修改紀錄'
 ];
 const C = {}; BOARD_HEADERS.forEach((h, i) => C[h] = i);   // 欄位 → 索引
-const BOARD_LAST_COL = 'S';
+const BOARD_LAST_COL = 'V';
 
 /* ----------------------------- 狀態 ------------------------------------ */
 const S = {
@@ -269,23 +270,30 @@ async function appendRow(title, values) {
 
 /* ----------------------------- 啟動流程 -------------------------------- */
 async function bootstrap() {
-  const meta = await api(`${CONFIG.SPREADSHEET_ID}?fields=sheets.properties(title)`);
-  const titles = (meta.sheets || []).map(s => s.properties.title);
+  const fields = '?fields=sheets.properties(sheetId,title)';
+  let sheets = (await api(CONFIG.SPREADSHEET_ID + fields)).sheets || [];
+  const find = t => sheets.find(s => s.properties.title === t);
 
-  S.productTitle = titles.find(t =>
+  S.productTitle = sheets.map(s => s.properties.title).find(t =>
     CONFIG.PRODUCT_SHEET_KEYWORDS.some(k => t.toLowerCase().includes(k.toLowerCase())));
-  if (!S.productTitle) throw new Error('在這份試算表找不到產品庫存工作表。\n現有工作表：' + titles.join('、'));
+  if (!S.productTitle) throw new Error('在這份試算表找不到產品庫存工作表。\n現有工作表：'
+    + sheets.map(s => s.properties.title).join('、'));
 
-  if (titles.includes(CONFIG.BOARD_SHEET)) {
-    S.boardTitle = CONFIG.BOARD_SHEET;
-  } else {
+  if (!find(CONFIG.BOARD_SHEET)) {
     await api(`${CONFIG.SPREADSHEET_ID}:batchUpdate`, {
       method: 'POST',
       body: JSON.stringify({ requests: [{ addSheet: { properties: { title: CONFIG.BOARD_SHEET } } }] })
     });
-    S.boardTitle = CONFIG.BOARD_SHEET;
-    await writeRanges([{ range: `'${CONFIG.BOARD_SHEET}'!A1:${BOARD_LAST_COL}1`, values: [BOARD_HEADERS] }]);
+    sheets = (await api(CONFIG.SPREADSHEET_ID + fields)).sheets || [];
     toast('已在試算表建立「' + CONFIG.BOARD_SHEET + '」工作表', 'ok');
+  }
+  S.boardTitle = CONFIG.BOARD_SHEET;
+  S.boardSheetId = find(CONFIG.BOARD_SHEET).properties.sheetId;
+
+  // 標題列若缺欄位（例如程式更新後多了「修改紀錄」）就自動補上
+  const hdr = (await readRange(S.boardTitle, `A1:${BOARD_LAST_COL}1`))[0] || [];
+  if (BOARD_HEADERS.some((h, i) => String(hdr[i] || '') !== h)) {
+    await writeRanges([{ range: `'${S.boardTitle}'!A1:${BOARD_LAST_COL}1`, values: [BOARD_HEADERS] }]);
   }
 
   $('subhead').textContent = `三重龍門 × 西門　·　庫存來源：${S.productTitle}`;
@@ -400,9 +408,53 @@ function planReserve(items, storeLabel) {
   return plan;
 }
 
-/** 把欄位增減量套用到庫存表（會先重新讀一次庫存，避免蓋掉別人剛改的數字） */
-async function applyDeltas(deltas) {            // deltas: Map(row → {欄位: 增減})
+/** 品項有可能因為庫存表插入列而位移，優先用「產品名稱＋規格」重新定位 */
+function resolveRow(p) {
+  if (p.name) {
+    const list = S.products.byName.get(p.name);
+    if (list) {
+      const hit = list.find(x => String(x.spec || '') === String(p.spec || ''));
+      if (hit) return hit.sheetRow;
+    }
+  }
+  return p.row;
+}
+
+/**
+ * 把一張單的庫存計畫套用到庫存表。
+ *   reserve = 建立預訂單（門市/總倉 -N，預定專區 +N）
+ *   ship    = 客人取貨（預定專區 -N，總數才真的減少）
+ *   restore = 取消預訂（預定專區 -N，門市/總倉原路 +N）
+ * 寫入前會重新讀一次庫存，避免蓋掉別人剛改的數字。
+ */
+async function applyPlan(plan, mode) {
+  if (!plan || !plan.length) return;
   await loadProducts();
+  const m = new Map();
+  const add = (row, h, v) => {
+    if (!v) return;
+    const d = m.get(row) || {}; d[h] = (d[h] || 0) + v; m.set(row, d);
+  };
+  for (const p of plan) {
+    const row = resolveRow(p);
+    const storeCol = p.storeCol || CONFIG.STORES[0].col;
+    if (mode === 'reserve') {
+      add(row, storeCol, -(p.fromStore || 0));
+      add(row, CONFIG.H.warehouse, -(p.fromWh || 0));
+      add(row, CONFIG.H.reserve, +p.qty);
+    } else if (mode === 'ship') {
+      add(row, CONFIG.H.reserve, -p.qty);
+    } else if (mode === 'restore') {
+      add(row, CONFIG.H.reserve, -p.qty);
+      add(row, storeCol, +(p.fromStore || 0));
+      add(row, CONFIG.H.warehouse, +(p.fromWh || 0));
+    }
+  }
+  await writeDeltas(m);
+}
+
+/** 把欄位增減量真正寫進庫存表 */
+async function writeDeltas(deltas) {            // deltas: Map(row → {欄位: 增減})
   const { cols, byRow, title } = S.products;
   const data = [];
   for (const [row, d] of deltas) {
@@ -425,26 +477,24 @@ async function applyDeltas(deltas) {            // deltas: Map(row → {欄位: 
   await writeRanges(data);
 }
 
-function deltasFromPlan(plan, mode) {
-  const m = new Map();
-  const add = (row, h, v) => {
-    if (!v) return;
-    const d = m.get(row) || {}; d[h] = (d[h] || 0) + v; m.set(row, d);
-  };
-  for (const p of plan) {
+/** 把計畫轉成人看得懂的文字，用在確認視窗 */
+function planText(plan, mode) {
+  return plan.map(p => {
+    const name = `${p.name} ${p.spec || ''}`.trim();
     if (mode === 'reserve') {
-      add(p.row, p.storeCol, -p.fromStore);
-      add(p.row, CONFIG.H.warehouse, -p.fromWh);
-      add(p.row, CONFIG.H.reserve, +p.qty);
-    } else if (mode === 'ship') {
-      add(p.row, CONFIG.H.reserve, -p.qty);
-    } else if (mode === 'restore') {
-      add(p.row, CONFIG.H.reserve, -p.qty);
-      add(p.row, p.storeCol, +p.fromStore);
-      add(p.row, CONFIG.H.warehouse, +p.fromWh);
+      const bits = [];
+      if (p.fromStore) bits.push(`門市 −${p.fromStore}`);
+      if (p.fromWh) bits.push(`總倉 −${p.fromWh}`);
+      return `・${name} ×${p.qty}　${bits.join('、')} → 預定專區 +${p.qty}`;
     }
-  }
-  return m;
+    if (mode === 'restore') {
+      const bits = [];
+      if (p.fromStore) bits.push(`門市 +${p.fromStore}`);
+      if (p.fromWh) bits.push(`總倉 +${p.fromWh}`);
+      return `・${name} ×${p.qty}　預定專區 −${p.qty} → ${bits.join('、') || '無'}`;
+    }
+    return `・${name} ×${p.qty}`;
+  }).join('\n');
 }
 
 /* ----------------------------- 畫面渲染 -------------------------------- */
@@ -521,19 +571,31 @@ function cardHTML(r) {
     else if (d === today) statusTag = '<span class="tag tag-routine">今天取貨</span>';
   }
 
+  // 修改紀錄（可收合）
+  const chgLines = String(r['修改紀錄'] || '').split('\n').filter(Boolean);
+  if (chgLines.length) {
+    body += `<details class="chg"><summary>修改紀錄（${chgLines.length} 次）</summary>
+      ${chgLines.map(x => `<div>${esc(x)}</div>`).join('')}</details>`;
+  }
+
+  const edit = `<button class="btn btn-sm" data-act="edit" data-id="${esc(r.id)}">✎ 修改</button>`;
   let actions = '';
   if (!done) {
     if (t === TYPES.ORDER) {
       if (r['庫存狀態'] === STOCK.FAILED) {
         actions = `<button class="btn btn-sm btn-primary" data-act="retry" data-id="${esc(r.id)}">重試扣庫存</button>
-                   <button class="btn btn-sm btn-danger" data-act="cancel" data-id="${esc(r.id)}">刪除此單</button>`;
+                   ${edit}
+                   <button class="btn btn-sm btn-danger" data-act="cancel" data-id="${esc(r.id)}">取消此單</button>`;
       } else {
         actions = `<button class="btn btn-sm btn-ok" data-act="ship" data-id="${esc(r.id)}">✓ 確認取貨完成</button>
+                   ${edit}
                    <button class="btn btn-sm btn-danger" data-act="cancel" data-id="${esc(r.id)}">取消預訂</button>`;
       }
     } else {
-      actions = `<button class="btn btn-sm btn-ok" data-act="finish" data-id="${esc(r.id)}">✓ 已處理完成</button>`;
+      actions = `<button class="btn btn-sm btn-ok" data-act="finish" data-id="${esc(r.id)}">✓ 已處理完成</button>${edit}`;
     }
+  } else if (r['狀態'] === STATUS.CANCEL) {
+    actions = `<button class="btn btn-sm btn-danger" data-act="del" data-id="${esc(r.id)}">🗑 刪除這筆紀錄</button>`;
   }
 
   return `<article class="card ${done ? 'is-done' : ''}">
@@ -546,7 +608,8 @@ function cardHTML(r) {
     <div class="card-body">${body}</div>
     <div class="card-foot">
       <span class="meta">${esc(r['建立者'])}　${esc(r['建立時間'])}
-        ${done && r['完成時間'] ? `　·　${esc(r['狀態'])}：${esc(r['完成者'])} ${esc(r['完成時間'])}` : ''}</span>
+        ${done && r['完成時間'] ? `　·　${esc(r['狀態'])}：${esc(r['完成者'])} ${esc(r['完成時間'])}` : ''}
+        ${r['最後修改者'] ? `<br>✎ 最後修改：${esc(r['最後修改者'])}　${esc(r['最後修改時間'])}` : ''}</span>
       ${actions}
     </div>
   </article>`;
@@ -561,23 +624,41 @@ document.addEventListener('click', async e => {
   if (S.busy) return;
   const act = b.dataset.act;
 
+  if (act === 'edit') { openForm(r.id); return; }
+
   if (act === 'ship') {
-    const items = parseJSON(r['品項JSON'], []);
-    if (!confirm(`確認「${r['客戶名稱']}」已經取貨？\n\n按下確定後會從庫存的「預定專區」扣掉：\n` +
-      items.map(i => `・${i.name} ${i.spec} × ${i.qty}`).join('\n'))) return;
+    const plan = parseJSON(r['庫存異動JSON'], []);
+    const ok = await confirmModal({
+      title: '確認客人已取貨？',
+      lines: `<p>客戶：<b>${esc(r['客戶名稱'])}</b></p>
+              <p style="color:var(--ink-2);font-size:14px">按下確定後會從庫存的「預定專區」扣掉，總數才會真正減少：</p>
+              <pre class="pre">${esc(planText(plan, 'ship'))}</pre>`,
+      okText: '確定，已取貨'
+    });
+    if (!ok) return;
     await doAction(b, async () => {
-      const plan = parseJSON(r['庫存異動JSON'], []);
-      if (plan.length) await applyDeltas(deltasFromPlan(plan, 'ship'));
+      await applyPlan(plan, 'ship');
       await updateBoardRow(r, { 狀態: STATUS.DONE, 完成時間: nowStr(), 完成者: userName(), 庫存狀態: STOCK.SHIPPED });
       toast('已完成並扣除庫存', 'ok');
     });
   }
 
   if (act === 'cancel') {
-    if (!confirm('要取消這張預訂單嗎？\n\n預留的貨會原路還回門市／總倉庫存。')) return;
+    const plan = parseJSON(r['庫存異動JSON'], []);
+    const reserved = r['庫存狀態'] === STOCK.RESERVED;
+    const ok = await confirmModal({
+      title: '要取消這張預訂單嗎？',
+      lines: `<p>客戶：<b>${esc(r['客戶名稱'] || '（無）')}</b></p>` +
+        (reserved
+          ? `<p style="color:var(--ink-2);font-size:14px">預留的貨會原路還回門市／總倉：</p>
+             <pre class="pre">${esc(planText(plan, 'restore'))}</pre>`
+          : `<p style="color:var(--ink-2);font-size:14px">這張單的庫存還沒扣，取消不會動到庫存。</p>`),
+      okText: '確定取消',
+      danger: true
+    });
+    if (!ok) return;
     await doAction(b, async () => {
-      const plan = parseJSON(r['庫存異動JSON'], []);
-      if (plan.length && r['庫存狀態'] === STOCK.RESERVED) await applyDeltas(deltasFromPlan(plan, 'restore'));
+      if (reserved) await applyPlan(plan, 'restore');
       await updateBoardRow(r, { 狀態: STATUS.CANCEL, 完成時間: nowStr(), 完成者: userName(), 庫存狀態: STOCK.RESTORED });
       toast('已取消，庫存已還原', 'ok');
     });
@@ -592,13 +673,79 @@ document.addEventListener('click', async e => {
 
   if (act === 'retry') {
     await doAction(b, async () => {
-      const plan = parseJSON(r['庫存異動JSON'], []);
-      await applyDeltas(deltasFromPlan(plan, 'reserve'));
+      await applyPlan(parseJSON(r['庫存異動JSON'], []), 'reserve');
       await updateBoardRow(r, { 庫存狀態: STOCK.RESERVED });
       toast('庫存已預留完成', 'ok');
     });
   }
+
+  // 永久刪除（只開放給已取消的紀錄）
+  if (act === 'del') {
+    if (r['狀態'] !== STATUS.CANCEL) return alert('只有「已取消」的紀錄才能刪除。');
+    const ok1 = await confirmModal({
+      title: '永久刪除這筆紀錄？',
+      lines: `<p>${esc(r['類型'])}　${esc(r['門市'])}</p>
+              <p>客戶：<b>${esc(r['客戶名稱'] || '（無）')}</b>${r['金額'] ? '　' + money(r['金額']) : ''}</p>
+              <p style="font-size:14px;color:var(--ink-2)">建立者 ${esc(r['建立者'])}　${esc(r['建立時間'])}</p>
+              <div class="warn-box">這會把試算表「留言板」裡的這一列整列刪掉，<b>無法復原</b>。<br>
+              庫存已經在取消時還原過了，刪除不會再動到庫存。</div>`,
+      okText: '我確定，刪除',
+      danger: true
+    });
+    if (!ok1) return;
+    const ok2 = await confirmModal({
+      title: '最後確認',
+      lines: `<p>真的要刪除「<b>${esc(r['客戶名稱'] || r['類型'])}</b>」這筆已取消的紀錄嗎？</p>
+              <p style="font-size:14px;color:var(--ink-2)">刪掉後就查不到了。若只是想留著看，按「取消」即可。</p>`,
+      okText: '永久刪除',
+      danger: true
+    });
+    if (!ok2) return;
+    await doAction(b, async () => {
+      await deleteBoardRow(r);
+      toast('已刪除這筆紀錄', 'ok');
+    });
+  }
 });
+
+/** 整列刪除留言板的某一筆（刪除前先確認位置沒被別人動過） */
+async function deleteBoardRow(r) {
+  const check = await readRange(S.boardTitle, `A${r._row}`);
+  if (String((check[0] || [])[0] || '') !== r.id) {
+    throw new Error('這筆紀錄在試算表的位置已經變動（可能有人同時在操作）。\n請按右上角「↻ 更新」後再試一次。');
+  }
+  await api(`${CONFIG.SPREADSHEET_ID}:batchUpdate`, {
+    method: 'POST',
+    body: JSON.stringify({
+      requests: [{
+        deleteDimension: {
+          range: { sheetId: S.boardSheetId, dimension: 'ROWS', startIndex: r._row - 1, endIndex: r._row }
+        }
+      }]
+    })
+  });
+}
+
+/** 通用確認視窗，回傳 true / false */
+function confirmModal({ title, lines, okText, danger }) {
+  return new Promise(res => {
+    const host = document.createElement('div');
+    host.innerHTML = `<div class="modal">
+      <div class="sheet" style="max-width:460px">
+        <div class="sheet-head"><h2>${esc(title)}</h2></div>
+        <div class="sheet-body">${lines}</div>
+        <div class="sheet-foot">
+          <button class="btn" data-no>取消</button>
+          <button class="btn ${danger ? 'btn-danger-solid' : 'btn-primary'}" data-yes>${esc(okText || '確定')}</button>
+        </div>
+      </div></div>`;
+    document.body.appendChild(host);
+    const done = v => { host.remove(); res(v); };
+    host.querySelector('[data-no]').onclick = () => done(false);
+    host.querySelector('[data-yes]').onclick = () => done(true);
+    host.querySelector('.modal').onclick = ev => { if (ev.target.classList.contains('modal')) done(false); };
+  });
+}
 
 function userName() { return (S.user && (S.user.name || S.user.email)) || '未知'; }
 
@@ -623,43 +770,76 @@ async function updateBoardRow(r, patch) {
 /* ----------------------------- 新增留言表單 ---------------------------- */
 let FORM = null;
 
-function openForm() {
-  FORM = { type: TYPES.ORDER, store: CONFIG.STORES[0].label, source: CONFIG.SOURCES[0], slot: CONFIG.SLOTS[0], routines: [], items: [newItem()] };
+function openForm(editId) {
+  const r = editId ? S.board.find(x => x.id === editId) : null;
+
+  if (r) {
+    FORM = {
+      editId: r.id,
+      type: r['類型'],
+      store: r['門市'] || CONFIG.STORES[0].label,
+      source: r['客戶來源'] || CONFIG.SOURCES[0],
+      slot: r['取貨時段'] || CONFIG.SLOTS[0],
+      cName: r['客戶名稱'] || '',
+      date: r['取貨日期'] || todayStr(),
+      note: r['備註'] || '',
+      taskText: r['類型'] === TYPES.TASK ? (r['備註'] || '') : '',
+      routines: String(r['例行工作項目'] || '').split('\n').filter(Boolean),
+      items: parseJSON(r['品項JSON'], []).map(i => {
+        const p = S.products.byRow.get(i.row);
+        const byName = !p && i.name ? (S.products.byName.get(i.name) || [])
+          .find(x => String(x.spec || '') === String(i.spec || '')) : null;
+        const hit = p || byName;
+        return { name: hit ? hit.name : (i.name || ''), row: hit ? hit.sheetRow : i.row, qty: i.qty, price: i.price };
+      })
+    };
+    if (!FORM.items.length) FORM.items = [newItem()];
+  } else {
+    FORM = {
+      editId: null, type: TYPES.ORDER, store: CONFIG.STORES[0].label,
+      source: CONFIG.SOURCES[0], slot: CONFIG.SLOTS[0], routines: [], items: [newItem()]
+    };
+  }
+
   const host = $('modalHost');
   host.innerHTML = `<div class="modal" id="modal">
     <div class="sheet">
       <div class="sheet-head">
-        <h2>新增留言</h2>
+        <h2>${r ? '修改' + esc(FORM.type) : '新增留言'}</h2>
         <button class="btn btn-ghost" id="closeForm">✕</button>
       </div>
       <div class="sheet-body">
-        <div class="field">
-          <label>留言類型</label>
-          <div class="chips" id="typeChips">
-            ${Object.values(TYPES).map(t => `<button class="chip ${t === TYPES.ORDER ? 'on' : ''}" data-type="${t}">${t}</button>`).join('')}
-          </div>
-        </div>
+        ${r ? `<div class="edit-hint">正在修改 ${esc(r['建立者'])} 於 ${esc(r['建立時間'])} 建立的這筆留言。<br>
+                 送出後會記錄「${esc(userName())}」修改了哪些欄位。留言類型不能更改。</div>`
+            : `<div class="field">
+                 <label>留言類型</label>
+                 <div class="chips" id="typeChips">
+                   ${Object.values(TYPES).map(t => `<button class="chip ${t === TYPES.ORDER ? 'on' : ''}" data-type="${t}">${t}</button>`).join('')}
+                 </div>
+               </div>`}
         <div class="field">
           <label>對應門市 <span class="req">*</span></label>
           <div class="chips" id="storeChips">
-            ${CONFIG.STORES.map((s, i) => `<button class="chip ${i === 0 ? 'on' : ''}" data-store="${s.label}">${s.label}</button>`).join('')}
+            ${CONFIG.STORES.map(s => `<button class="chip ${s.label === FORM.store ? 'on' : ''}" data-store="${s.label}">${s.label}</button>`).join('')}
           </div>
         </div>
         <div id="formBody"></div>
       </div>
       <div class="sheet-foot">
         <button class="btn" id="cancelForm">取消</button>
-        <button class="btn btn-primary" id="submitForm">送出留言</button>
+        <button class="btn btn-primary" id="submitForm">${r ? '儲存修改' : '送出留言'}</button>
       </div>
     </div></div>`;
 
   $('closeForm').onclick = $('cancelForm').onclick = closeForm;
   $('submitForm').onclick = submitForm;
-  host.querySelectorAll('#typeChips .chip').forEach(c => c.onclick = () => {
-    FORM.type = c.dataset.type;
-    host.querySelectorAll('#typeChips .chip').forEach(x => x.classList.toggle('on', x === c));
-    renderFormBody();
-  });
+  if ($('typeChips')) {
+    host.querySelectorAll('#typeChips .chip').forEach(c => c.onclick = () => {
+      FORM.type = c.dataset.type;
+      host.querySelectorAll('#typeChips .chip').forEach(x => x.classList.toggle('on', x === c));
+      renderFormBody();
+    });
+  }
   host.querySelectorAll('#storeChips .chip').forEach(c => c.onclick = () => {
     FORM.store = c.dataset.store;
     host.querySelectorAll('#storeChips .chip').forEach(x => x.classList.toggle('on', x === c));
@@ -815,25 +995,21 @@ function updateTotal() { const el = $('fTotal'); if (el) el.textContent = money(
 async function submitForm() {
   const btn = $('submitForm');
   const t = FORM.type;
-  const id = 'M' + Date.now().toString(36).toUpperCase();
-  let values = new Array(BOARD_HEADERS.length).fill('');
-  values[C['id']] = id;
-  values[C['類型']] = t;
-  values[C['建立時間']] = nowStr();
-  values[C['建立者']] = userName();
-  values[C['門市']] = FORM.store;
-  values[C['狀態']] = STATUS.OPEN;
-  values[C['庫存狀態']] = STOCK.NA;
+  const editing = !!FORM.editId;
+  const r = editing ? S.board.find(x => x.id === FORM.editId) : null;
+  if (editing && !r) return alert('找不到這筆留言，請按右上角「↻ 更新」後再試。');
 
+  /* ── 先把這次填的內容整理成「要寫進試算表的欄位」 ── */
+  const f = {};
   let plan = null;
 
   if (t === TYPES.TASK) {
     if (!(FORM.taskText || '').trim()) return alert('請填寫交接內容');
-    values[C['備註']] = FORM.taskText.trim();
+    f['備註'] = FORM.taskText.trim();
   } else if (t === TYPES.ROUTINE) {
     if (!FORM.routines.length) return alert('請至少勾選一項例行工作');
-    values[C['例行工作項目']] = FORM.routines.join('\n');
-    values[C['備註']] = (FORM.note || '').trim();
+    f['例行工作項目'] = FORM.routines.join('\n');
+    f['備註'] = (FORM.note || '').trim();
   } else {
     if (!(FORM.cName || '').trim()) return alert('請填寫客戶名稱');
     if (!FORM.date) return alert('請選擇預計取貨日期');
@@ -841,52 +1017,128 @@ async function submitForm() {
     if (!items.length) return alert('請選擇預訂品項：先選「產品名稱」，再選「產品規格」');
 
     plan = planReserve(items, FORM.store);
-    const shorts = plan.filter(p => p.short > 0);
-    const msg = '請確認這張預訂單會怎麼動庫存：\n\n' +
-      plan.map(p => {
-        const bits = [];
-        if (p.fromStore) bits.push(`${FORM.store} −${p.fromStore}`);
-        if (p.fromWh) bits.push(`總倉 −${p.fromWh}`);
-        return `・${p.name} ${p.spec} × ${p.qty}\n　　${bits.join('、')}　→　預定專區 +${p.qty}`;
-      }).join('\n') +
-      '\n\n（總數不變，客戶取貨按「確認完成」時才真正出庫）' +
-      (shorts.length ? '\n\n⚠ 以下品項連總倉都不足，送出後庫存會變成負數，請確認是否要跟廠商調貨：\n' +
-        shorts.map(p => `・${p.name} ${p.spec}（缺 ${p.short}）`).join('\n') : '');
-    if (!confirm(msg)) return;
+    f['客戶名稱'] = FORM.cName.trim();
+    f['客戶來源'] = FORM.source;
+    f['取貨日期'] = FORM.date;
+    f['取貨時段'] = FORM.slot;
+    f['金額'] = formTotal();
+    f['備註'] = (FORM.note || '').trim();
+    f['品項明細'] = plan.map(p => `${p.name} ${p.spec} ×${p.qty}`).join('\n');
+    f['品項JSON'] = JSON.stringify(plan.map(p =>
+      ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, price: p.price })));
+    f['庫存異動JSON'] = JSON.stringify(plan.map(p =>
+      ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, storeCol: p.storeCol, fromStore: p.fromStore, fromWh: p.fromWh })));
+  }
+  f['門市'] = FORM.store;
 
-    values[C['客戶名稱']] = FORM.cName.trim();
-    values[C['客戶來源']] = FORM.source;
-    values[C['取貨日期']] = FORM.date;
-    values[C['取貨時段']] = FORM.slot;
-    values[C['金額']] = formTotal();
-    values[C['備註']] = (FORM.note || '').trim();
-    values[C['品項明細']] = plan.map(p => `${p.name} ${p.spec} ×${p.qty}`).join('\n');
-    values[C['品項JSON']] = JSON.stringify(plan.map(p => ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, price: p.price })));
-    values[C['庫存異動JSON']] = JSON.stringify(plan.map(p =>
-      ({ row: p.row, qty: p.qty, storeCol: p.storeCol, fromStore: p.fromStore, fromWh: p.fromWh })));
-    values[C['庫存狀態']] = STOCK.FAILED;      // 先記未扣，扣成功後改「已預留」
+  const shorts = plan ? plan.filter(p => p.short > 0) : [];
+  const shortHTML = shorts.length
+    ? `<div class="warn-box">⚠ 以下品項連總倉都不足，送出後庫存會變成負數，請先確認能不能跟廠商調貨：<br>
+       ${shorts.map(p => `・${esc(p.name)} ${esc(p.spec)}（缺 ${p.short}）`).join('<br>')}</div>`
+    : '';
+
+  /* ══════════════ 新增 ══════════════ */
+  if (!editing) {
+    if (plan) {
+      const ok = await confirmModal({
+        title: '確認這張預訂單',
+        lines: `<p style="color:var(--ink-2);font-size:14px">送出後庫存會這樣動（總數不變，客人取貨按「確認完成」時才真正出庫）：</p>
+                <pre class="pre">${esc(planText(plan, 'reserve'))}</pre>${shortHTML}`,
+        okText: '確定送出'
+      });
+      if (!ok) return;
+    }
+    const id = 'M' + Date.now().toString(36).toUpperCase();
+    const values = new Array(BOARD_HEADERS.length).fill('');
+    values[C['id']] = id;
+    values[C['類型']] = t;
+    values[C['建立時間']] = nowStr();
+    values[C['建立者']] = userName();
+    values[C['狀態']] = STATUS.OPEN;
+    values[C['庫存狀態']] = plan ? STOCK.FAILED : STOCK.NA;   // 先記未扣，扣成功後改「已預留」
+    Object.keys(f).forEach(k => { if (C[k] !== undefined) values[C[k]] = f[k]; });
+
+    S.busy = true; btn.disabled = true; btn.textContent = '送出中…';
+    try {
+      await appendRow(S.boardTitle, values);
+      if (plan) {
+        try {
+          await applyPlan(plan, 'reserve');
+          await loadBoard();
+          const nr = S.board.find(x => x.id === id);
+          if (nr) await updateBoardRow(nr, { 庫存狀態: STOCK.RESERVED });
+        } catch (err) {
+          alert('留言已送出，但庫存預留失敗：\n' + err.message + '\n\n請在卡片上按「重試扣庫存」。');
+        }
+      }
+      closeForm();
+      await refreshAll('留言已送出');
+    } catch (err) {
+      alert('送出失敗：\n\n' + err.message);
+    } finally {
+      S.busy = false;
+      if ($('submitForm')) { btn.disabled = false; btn.textContent = '送出留言'; }
+    }
+    return;
   }
 
-  S.busy = true; btn.disabled = true; btn.textContent = '送出中…';
+  /* ══════════════ 修改 ══════════════ */
+  const LABEL = {
+    門市: '對應門市', 客戶名稱: '客戶名稱', 客戶來源: '客戶來源',
+    取貨日期: '取貨日期', 取貨時段: '取貨時段', 金額: '金額',
+    備註: (t === TYPES.TASK ? '交接內容' : '備註'),
+    品項明細: '品項', 例行工作項目: '例行工作'
+  };
+  const oneLine = s => String(s).replace(/\n/g, ' ／ ');
+  const changes = [], patch = {};
+  for (const k of Object.keys(f)) {
+    const ov = String(r[k] ?? ''), nv = String(f[k] ?? '');
+    if (ov === nv) continue;
+    patch[k] = f[k];
+    if (LABEL[k]) changes.push(`${LABEL[k]}：${oneLine(ov) || '（空白）'} → ${oneLine(nv) || '（空白）'}`);
+  }
+  const itemsChanged = patch['品項明細'] !== undefined || patch['門市'] !== undefined;
+  if (plan && itemsChanged) {
+    patch['品項JSON'] = f['品項JSON'];
+    patch['庫存異動JSON'] = f['庫存異動JSON'];
+  }
+  if (!changes.length) { closeForm(); return toast('沒有任何變更'); }
+
+  const oldPlan = parseJSON(r['庫存異動JSON'], []);
+  const rework = !!(plan && itemsChanged && r['庫存狀態'] === STOCK.RESERVED);
+
+  const ok = await confirmModal({
+    title: '確認修改內容',
+    lines: `<p style="font-size:14px;color:var(--ink-2)">這些變更會存進留言板，並記下是「${esc(userName())}」改的：</p>
+      <pre class="pre">${esc(changes.join('\n'))}</pre>
+      ${rework ? `<p style="font-size:14px;color:var(--ink-2)">品項或門市有變動，庫存會先把舊的還回去、再依新內容重新預留：</p>
+        <pre class="pre">① 還原舊的
+${esc(planText(oldPlan, 'restore'))}
+
+② 重新預留
+${esc(planText(plan, 'reserve'))}</pre>${shortHTML}` : ''}`,
+    okText: '確定儲存'
+  });
+  if (!ok) return;
+
+  S.busy = true; btn.disabled = true; btn.textContent = '儲存中…';
   try {
-    await appendRow(S.boardTitle, values);
-    if (plan) {
-      try {
-        await applyDeltas(deltasFromPlan(plan, 'reserve'));
-        await loadBoard();
-        const r = S.board.find(x => x.id === id);
-        if (r) await updateBoardRow(r, { 庫存狀態: STOCK.RESERVED });
-      } catch (err) {
-        alert('留言已送出，但庫存預留失敗：\n' + err.message + '\n\n請在卡片上按「重試扣庫存」。');
-      }
+    if (rework) {
+      await applyPlan(oldPlan, 'restore');
+      await applyPlan(plan, 'reserve');
     }
+    patch['最後修改時間'] = nowStr();
+    patch['最後修改者'] = userName();
+    patch['修改紀錄'] = (r['修改紀錄'] ? r['修改紀錄'] + '\n' : '')
+      + `${nowStr()} ${userName()}：${changes.join('；')}`;
+    await updateBoardRow(r, patch);
     closeForm();
-    await refreshAll('留言已送出');
+    await refreshAll('已儲存修改');
   } catch (err) {
-    alert('送出失敗：\n\n' + err.message);
+    alert('儲存失敗：\n\n' + err.message);
   } finally {
     S.busy = false;
-    if ($('submitForm')) { btn.disabled = false; btn.textContent = '送出留言'; }
+    if ($('submitForm')) { btn.disabled = false; btn.textContent = '儲存修改'; }
   }
 }
 
