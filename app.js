@@ -39,6 +39,7 @@ const CONFIG = {
   // 庫存表的欄位標題（若日後欄位改名，改這裡即可）
   H: {
     code: '產品編號', name: '產品名稱', spec: '產品規格',
+    category: '分類',       // ← 在庫存表新增這一欄，品項選單就會多一層分類分頁
     reserve: '預定專區', warehouse: '總倉數量', total: '總數',
     safety: '安全庫存值', price: '售價'
   },
@@ -115,6 +116,8 @@ function srcOptions() {
           ...CONFIG.STORES.map(s => ({ col: s.col, label: s.label }))];
 }
 const DEFAULT_SRC = () => CONFIG.H.warehouse;
+const UNCAT = '未分類';            // 分類欄空白時歸在這裡
+const ALL_CAT = '__ALL__';         // 「全部」分頁
 /** 欄位標題 → 畫面顯示的名字（三重店 → 三重龍門） */
 function srcLabel(col) {
   const hit = srcOptions().find(o => o.col === col);
@@ -314,7 +317,7 @@ async function bootstrap() {
     await writeRanges([{ range: `'${S.boardTitle}'!A1:${BOARD_LAST_COL}1`, values: [BOARD_HEADERS] }]);
   }
 
-  $('subhead').textContent = `三重龍門 × 西門　·　庫存來源：${S.productTitle}`;
+  $('subhead').dataset.base = `三重龍門 × 西門　·　庫存來源：${S.productTitle}`;
 
   await loadProducts();
   await loadBoard();
@@ -325,7 +328,7 @@ async function bootstrap() {
 
 /** 讀庫存表：用標題列自動對應欄位，欄位順序變動也不會壞 */
 async function loadProducts() {
-  const rows = await readRange(S.productTitle, 'A1:Z600', 'FORMULA');
+  const rows = await readRange(S.productTitle, 'A1:Z3000', 'FORMULA');
   let hi = -1;
   for (let i = 0; i < Math.min(rows.length, 10); i++) {
     if ((rows[i] || []).some(c => String(c).trim() === CONFIG.H.name)) { hi = i; break; }
@@ -351,8 +354,11 @@ async function loadProducts() {
       nums[h] = toNum(raw) ?? 0;
       formula[h] = isFormula(raw);
     });
+    const rawCat = cols[CONFIG.H.category] !== undefined
+      ? String(r[cols[CONFIG.H.category]] ?? '').trim() : '';
     const p = {
       sheetRow: i + 1, name, spec,
+      cat: rawCat || UNCAT,
       label: spec ? `${name}　${spec}` : name,
       nums, formula,
       price: nums[CONFIG.H.price] || 0
@@ -361,7 +367,24 @@ async function loadProducts() {
     if (!byName.has(name)) { byName.set(name, []); names.push(name); }
     byName.get(name).push(p);
   }
-  S.products = { title: S.productTitle, cols, rows: list, byRow, byName, names };
+
+  // 分類（依照試算表由上到下的順序）
+  const cats = [], byCat = new Map();
+  for (const p of list) {
+    if (!byCat.has(p.cat)) { byCat.set(p.cat, []); cats.push(p.cat); }
+    const arr = byCat.get(p.cat);
+    if (!arr.includes(p.name)) arr.push(p.name);
+  }
+  // 只有在庫存表真的有「分類」欄、而且有填東西時，才啟用分類分頁
+  const hasCats = cols[CONFIG.H.category] !== undefined && cats.some(c => c !== UNCAT);
+
+  S.products = { title: S.productTitle, cols, rows: list, byRow, byName, names, cats, byCat, hasCats };
+
+  const sub = $('subhead');
+  if (sub) {
+    const catNote = hasCats ? `　·　${cats.length} 個分類：${cats.join('、')}` : '　·　尚未設定分類欄';
+    sub.textContent = (sub.dataset.base || '三重龍門 × 西門') + `　·　${list.length} 個品項${catNote}`;
+  }
 }
 
 async function loadBoard() {
@@ -900,7 +923,8 @@ function openForm(editId) {
           .find(x => String(x.spec || '') === String(i.spec || '')) : null;
         const hit = p || byName;
         return { name: hit ? hit.name : (i.name || ''), row: hit ? hit.sheetRow : i.row,
-                 qty: i.qty, price: i.price || 0, src: i.src || i.storeCol || DEFAULT_SRC() };
+                 qty: i.qty, price: i.price || 0, src: i.src || i.storeCol || DEFAULT_SRC(),
+                 cat: hit ? hit.cat : null };
       })
     };
     if (!FORM.items.length) FORM.items = [newItem()];
@@ -958,7 +982,10 @@ function openForm(editId) {
   renderFormBody();
 }
 function closeForm() { $('modalHost').innerHTML = ''; FORM = null; }
-function newItem() { return { name: '', row: null, qty: 1, price: 0, src: DEFAULT_SRC() }; }
+function newItem() {
+  // 分類與出貨來源都沿用上一次選的，同事連續選同一類時不用重選
+  return { name: '', row: null, qty: 1, price: 0, src: S.lastSrc || DEFAULT_SRC(), cat: S.lastCat || null };
+}
 
 function renderFormBody() {
   const b = $('formBody');
@@ -1061,27 +1088,38 @@ function stockBrief(p) {
 
 function renderItems() {
   const host = $('itemRows');
-  const names = S.products.names;
+  const P = S.products;
   const isStock = FORM.type === TYPES.STOCKUP;
+
   host.innerHTML = FORM.items.map((it, i) => {
-    const p = it.row ? S.products.byRow.get(it.row) : null;
-    const variants = it.name ? (S.products.byName.get(it.name) || []) : [];
+    const p = it.row ? P.byRow.get(it.row) : null;
+    // 這一列目前在哪個分類分頁
+    const cat = it.cat || (p ? p.cat : null) || S.lastCat || (P.cats[0] || ALL_CAT);
+    const names = (!P.hasCats || cat === ALL_CAT) ? P.names : (P.byCat.get(cat) || []);
+    const variants = it.name ? (P.byName.get(it.name) || []) : [];
     const srcQty = p ? (p.nums[it.src || DEFAULT_SRC()] || 0) : 0;
+
+    const tabs = P.hasCats ? `<div class="cat-tabs">
+        ${P.cats.map(c => `<button class="cat-tab${c === cat ? ' on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}
+        <button class="cat-tab${cat === ALL_CAT ? ' on' : ''}" data-cat="${ALL_CAT}">全部</button>
+      </div>` : '';
+
     return `<div class="item-row" data-i="${i}">
+      ${tabs}
       <div class="two">
-        <div class="f"><label>① 產品名稱</label>
+        <div class="f"><label>${P.hasCats ? '②' : '①'} 產品名稱</label>
           <select class="itemName">
-            <option value="">— 請選擇產品名稱（共 ${names.length} 項）—</option>
+            <option value="">— 請選擇（${names.length} 項）—</option>
             ${names.map(n => `<option value="${esc(n)}"${n === it.name ? ' selected' : ''}>${esc(n)}</option>`).join('')}
           </select>
         </div>
-        <div class="f"><label>② 產品規格</label>
+        <div class="f"><label>${P.hasCats ? '③' : '②'} 產品規格</label>
           <select class="itemSpec"${it.name ? '' : ' disabled'}>
             <option value="">${it.name ? `— 請選擇規格（${variants.length} 種）—` : '請先選產品名稱'}</option>
             ${variants.map(v => `<option value="${v.sheetRow}"${v.sheetRow === it.row ? ' selected' : ''}>${esc(v.spec || '（無規格）')}${esc(stockBrief(v))}</option>`).join('')}
           </select>
         </div>
-        <div class="f"><label>③ 從哪裡出貨</label>
+        <div class="f"><label>${P.hasCats ? '④' : '③'} 從哪裡出貨</label>
           <select class="itemSrc">
             ${srcOptions().map(o => `<option value="${esc(o.col)}"${(it.src || DEFAULT_SRC()) === o.col ? ' selected' : ''}>${esc(o.label)}${p ? `（現有 ${p.nums[o.col] || 0}）` : ''}</option>`).join('')}
           </select>
@@ -1104,6 +1142,16 @@ function renderItems() {
   host.querySelectorAll('.item-row').forEach(row => {
     const i = +row.dataset.i, it = FORM.items[i];
 
+    row.querySelectorAll('.cat-tab').forEach(t => t.onclick = () => {
+      it.cat = t.dataset.cat;
+      S.lastCat = it.cat;                      // 下一個品項預設同一個分類
+      if (it.name) {                            // 換分類後，原本選的品名若不在這一類就清掉
+        const names = it.cat === ALL_CAT ? S.products.names : (S.products.byCat.get(it.cat) || []);
+        if (!names.includes(it.name)) { it.name = ''; it.row = null; }
+      }
+      renderItems();
+    });
+
     row.querySelector('.itemName').onchange = e => {
       it.name = e.target.value;
       it.row = null;
@@ -1114,10 +1162,14 @@ function renderItems() {
     row.querySelector('.itemSpec').onchange = e => {
       it.row = +e.target.value || null;
       const p = it.row ? S.products.byRow.get(it.row) : null;
-      if (p) it.price = p.price;
+      if (p) { it.price = p.price; it.cat = p.cat; }
       renderItems(); updateTotal();
     };
-    row.querySelector('.itemSrc').onchange = e => { it.src = e.target.value; renderItems(); };
+    row.querySelector('.itemSrc').onchange = e => {
+      it.src = e.target.value;
+      S.lastSrc = it.src;                       // 下一個品項預設同一個出貨來源
+      renderItems();
+    };
     row.querySelector('.itemQty').oninput = e => {
       it.qty = Math.max(1, +e.target.value || 1);
       updateTotal(); syncSub(row, it);
