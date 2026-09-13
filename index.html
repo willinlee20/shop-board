@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="app-version" content="1.5">
 <title>工作留言板｜三重龍門 × 西門</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -40,6 +41,8 @@ header{
   display:grid;place-items:center;font-weight:700;font-size:16px;flex:0 0 auto;
 }
 .logo h1{font-size:17px;margin:0;line-height:1.2}
+.ver{font-size:11px;font-weight:500;color:var(--ink-3);background:#f1f5f9;border-radius:5px;padding:1px 6px;vertical-align:2px}
+.ver.bad{background:var(--bad-soft);color:var(--bad)}
 .logo p{margin:0;font-size:12px;color:var(--ink-3)}
 .who{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-2)}
 .avatar{width:28px;height:28px;border-radius:50%;background:var(--line)}
@@ -241,7 +244,7 @@ textarea{min-height:84px;resize:vertical}
       <div class="logo">
         <div class="logo-mark">板</div>
         <div>
-          <h1>工作留言板</h1>
+          <h1>工作留言板 <span id="appVer" class="ver"></span></h1>
           <p id="subhead">三重龍門 × 西門</p>
         </div>
       </div>
@@ -276,6 +279,6 @@ textarea{min-height:84px;resize:vertical}
 <div id="toastHost"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="app.js"></script>
+<script src="app.js?v=1.5"></script>
 </body>
 </html>

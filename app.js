@@ -4,6 +4,10 @@
    資料庫：Google Sheet「進銷存總表－dragon2gates_bot」
    ========================================================================= */
 
+/* ----------------------------- 版本 ------------------------------------ */
+const APP_VERSION = '1.5';          // 每次改版都會更新，畫面右上角看得到
+const APP_DATE = '2026-09-13';
+
 /* ----------------------------- 設定區 -----------------------------------
    要改的東西都在這裡，下面的程式不用動。
    ----------------------------------------------------------------------- */
@@ -1509,6 +1513,20 @@ window.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('#storeSeg button').forEach(x => x.classList.toggle('on', x === b));
     render();
   });
+
+  // 顯示版本，並檢查 index.html 與 app.js 是不是同一版
+  const verEl = $('appVer');
+  if (verEl) {
+    verEl.textContent = 'v' + APP_VERSION;
+    verEl.title = `版本 ${APP_VERSION}（${APP_DATE}）`;
+  }
+  const htmlVer = (document.querySelector('meta[name="app-version"]') || {}).content;
+  if (htmlVer && htmlVer !== APP_VERSION) {
+    setTimeout(() => {
+      if (verEl) { verEl.textContent = 'v' + APP_VERSION + ' ⚠'; verEl.classList.add('bad'); }
+      toast(`檔案版本不一致：index.html 是 v${htmlVer}、app.js 是 v${APP_VERSION}。請確認兩個檔案都有上傳，並重新整理。`, 'bad');
+    }, 800);
+  }
 
   // 等 Google 登入程式庫載入
   let tries = 0;
