@@ -216,8 +216,9 @@ body{margin:0}
   <p class="lede">交接班的時候，下一班的人只要打開這一頁，就知道所有還沒處理完的事。</p>
   <div class="types">
     <div class="type"><span class="n">一</span><b>客戶預訂單</b><i>客人預訂商品、約好哪天來拿。按下「確認取貨完成」會自動扣庫存。</i></div>
-    <div class="type"><span class="n">二</span><b>任務交接</b><i>任何要交接給下一班的事，空白自己打。</i></div>
-    <div class="type"><span class="n">三</span><b>例行工作</b><i>倒垃圾、盤點、清潔環境、擦玻璃這類提醒，勾選就好。</i></div>
+    <div class="type"><span class="n">二</span><b>備貨</b><i>門市要補貨，從總倉（或另一間店）調貨過來。按「備貨完成」會把貨轉進該門市，<b>總數不變</b>。</i></div>
+    <div class="type"><span class="n">三</span><b>任務交接</b><i>任何要交接給下一班的事，空白自己打。</i></div>
+    <div class="type"><span class="n">四</span><b>例行工作</b><i>倒垃圾、盤點、清潔環境、擦玻璃這類提醒，勾選就好。</i></div>
   </div>
   <p style="margin-top:20px;color:var(--ink-2);font-size:15px">每一則留言都要選<b>對應門市</b>。畫面上方可以切換「全部門市／三重龍門／西門」，只看自己這一間。</p>
 </section>
@@ -230,11 +231,52 @@ body{margin:0}
     <div><dt>客戶來源</dt><dd>店內 · 網路 · 親友</dd></div>
     <div><dt>取貨日期</dt><dd>點日曆選。</dd></div>
     <div><dt>取貨時段</dt><dd>13:00–15:00 · 15:00–17:00 · 17:00–19:00 · 19:00–22:00</dd></div>
-    <div><dt>預訂品項</dt><dd><b>先選「① 產品名稱」，再選「② 產品規格」</b>——兩層下拉，例如先選「小海豚 煙彈」，再選「0.4」。規格清單上會直接顯示<b>各店現有庫存</b>，選好後單價自動帶入售價。要訂第二樣按「＋ 增加品項」。</dd></div>
+    <div><dt>預訂品項</dt><dd><b>① 產品名稱 → ② 產品規格 → ③ 從哪裡出貨</b>。規格清單會顯示各處現有庫存，選好後單價自動帶入售價。<b>「從哪裡出貨」預設是總倉</b>，也可以改成三重龍門或西門——客人在哪取貨、貨從哪出，不一定是同一個地方，每個品項都能各自指定。要訂第二樣按「＋ 增加品項」。</dd></div>
     <div><dt>銷售價格</dt><dd>預設是售價，有折扣直接改數字，小計會自己算。</dd></div>
     <div><dt>備註</dt><dd>客人交代的事，例如「要換殼」、「會晚一點到」。</dd></div>
   </dl>
   <p style="margin-top:20px;font-size:15px">送出前會跳一個確認視窗，<b>告訴你這張單會怎麼動庫存</b>。看過沒問題再按確定。</p>
+</section>
+
+<section>
+  <h2>備貨單</h2>
+  <p class="lede">門市缺貨、要從總倉或另一間店調貨過來時，開一張「備貨」。</p>
+  <dl class="fields">
+    <div><dt>對應門市</dt><dd>貨要送去哪一間。</dd></div>
+    <div><dt>備貨日期</dt><dd>哪一天要備，不用填時間。</dd></div>
+    <div><dt>品項</dt><dd>產品名稱 → 產品規格 → <b>從哪裡出貨（預設總倉）</b> → 數量。不用填價格。</dd></div>
+    <div><dt>備註</dt><dd>例如「週三送貨車一起帶過去」。</dd></div>
+  </dl>
+  <div class="flow" style="margin-top:26px">
+    <div class="step hold">
+      <span class="dot">1</span>
+      <div>
+        <h4>送出備貨單</h4>
+        <p class="when">貨還在原本的位置，先卡住不讓別人賣掉</p>
+        <div class="deltas">
+          <div><span class="lab">出貨來源</span><span class="val minus">− N</span><span style="color:var(--ink-3);font-size:14px">總倉或另一間店</span></div>
+          <div><span class="lab">預定專區</span><span class="val plus">＋ N</span></div>
+          <div><span class="lab">總數</span><span class="val flat">不變</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="step out">
+      <span class="dot">2</span>
+      <div>
+        <h4>貨送到了 — 按「備貨完成」</h4>
+        <p class="when">庫存轉移，不是出庫</p>
+        <div class="deltas">
+          <div><span class="lab">預定專區</span><span class="val minus">− N</span></div>
+          <div><span class="lab">該門市</span><span class="val out-val">＋ N</span></div>
+          <div><span class="lab">總數</span><span class="val flat">不變</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="why">
+    <b>和預訂單最大的不同</b>
+    <p>備貨完成是<b>庫存轉移</b>，總數不會減少——貨只是從倉庫換到店裡，公司還是有這些貨。預訂單的「確認取貨完成」才是真的賣掉，總數才會減少。</p>
+  </div>
 </section>
 
 <section>
@@ -248,7 +290,7 @@ body{margin:0}
         <h4>開單 — 把貨預留起來</h4>
         <p class="when">按下「送出留言」的那一刻</p>
         <div class="deltas">
-          <div><span class="lab">取貨門市</span><span class="val minus">− N</span><span style="color:var(--ink-3);font-size:14px">門市不夠的部分自動從總倉補</span></div>
+          <div><span class="lab">出貨來源</span><span class="val minus">− N</span><span style="color:var(--ink-3);font-size:14px">開單時自己選，預設總倉</span></div>
           <div><span class="lab">預定專區</span><span class="val plus">＋ N</span></div>
           <div><span class="lab">總數</span><span class="val flat">不變</span></div>
         </div>
@@ -269,10 +311,10 @@ body{margin:0}
       <span class="dot">3</span>
       <div>
         <h4>客人不要了 — 原路還回去</h4>
-        <p class="when">按下「取消預訂」</p>
+        <p class="when">按下「取消預訂」，並選擇要退回哪裡</p>
         <div class="deltas">
           <div><span class="lab">預定專區</span><span class="val minus">− N</span></div>
-          <div><span class="lab">門市／總倉</span><span class="val plus">＋ N</span><span style="color:var(--ink-3);font-size:14px">照當初扣的紀錄還回</span></div>
+          <div><span class="lab">退回位置</span><span class="val plus">＋ N</span><span style="color:var(--ink-3);font-size:14px">取消時可選，預設原來源</span></div>
           <div><span class="lab">總數</span><span class="val flat">回到開單前</span></div>
         </div>
       </div>
@@ -280,15 +322,15 @@ body{margin:0}
   </div>
 
   <h3>實際跑一遍</h3>
-  <p style="font-size:15px">客人在<b>三重龍門</b>訂<b>酪梨寶寶煙彈 酪梨倉 0.7 × 5 個</b>。開單前：三重店 3、西門店 3、預定專區 0、總倉 6。</p>
+  <p style="font-size:15px">客人在<b>三重龍門</b>取貨，訂<b>酪梨寶寶煙彈 酪梨倉 0.7 × 5 個</b>，出貨來源選<b>總倉</b>。開單前：三重店 3、西門店 3、預定專區 0、總倉 6。</p>
   <div class="ledger-wrap">
   <table>
-    <caption>門市只有 3 個，不夠的 2 個自動從總倉調——但「總數 12」一直沒變，直到客人真的把貨帶走。</caption>
+    <caption>整筆從你選的來源扣——「總數 12」一直沒變，直到客人真的把貨帶走。</caption>
     <thead><tr><th>時間點</th><th>三重店</th><th>西門店</th><th>預定專區</th><th>總倉</th><th>總數</th></tr></thead>
     <tbody>
       <tr><td>開單前</td><td>3</td><td>3</td><td>0</td><td>6</td><td>12</td></tr>
-      <tr class="mark"><td>① 開單後</td><td class="hi">0</td><td>3</td><td class="hi">5</td><td class="hi">4</td><td>12</td></tr>
-      <tr class="done"><td>② 客人取貨後</td><td>0</td><td>3</td><td class="hi">0</td><td>4</td><td class="hi">7</td></tr>
+      <tr class="mark"><td>① 開單後</td><td>3</td><td>3</td><td class="hi">5</td><td class="hi">1</td><td>12</td></tr>
+      <tr class="done"><td>② 客人取貨後</td><td>3</td><td>3</td><td class="hi">0</td><td>1</td><td class="hi">7</td></tr>
     </tbody>
   </table>
   </div>
@@ -319,10 +361,8 @@ body{margin:0}
 <section>
   <h2>特殊狀況</h2>
   <dl class="qa">
-    <div><dt>門市沒現貨，可以幫客人訂嗎？</dt>
-      <dd>可以。清單上會標「本店無現貨」，但還是選得到，系統會自動從<b>總倉</b>扣，等於跟倉庫調貨。</dd></div>
-    <div><dt>連總倉也不夠？</dt>
-      <dd>送出前的確認視窗會用 ⚠️ 警告你「庫存會變成負數」。這種情況請<b>先確認能不能跟廠商調到貨</b>再送出。負數的意思就是「已經賣掉但還沒進貨」。</dd></div>
+    <div><dt>選的出貨來源數量不夠？</dt>
+      <dd>送出前的確認視窗會用 ⚠️ 告訴你「該來源不足、缺幾個、會變成負數」。可以改從別的地方出貨，或先確認能不能調到貨再送出。</dd></div>
     <div><dt>不小心按錯「確認取貨完成」？</dt>
       <dd><em>不要重複操作。</em>庫存已經扣掉了，請直接告知負責人手動調整，不要自己再開單來回沖。</dd></div>
     <div><dt>卡片上出現「重試扣庫存」按鈕？</dt>
@@ -331,6 +371,10 @@ body{margin:0}
       <dd>沒問題，系統會自動合計再扣。</dd></div>
     <div><dt>改單改錯了，可以再改回來嗎？</dt>
       <dd>可以，修改沒有次數限制，每一次都會留下紀錄。庫存也會跟著每次修改重新算一遍，不會累積錯誤。</dd></div>
+    <div><dt>客人在三重取貨，但貨在西門？</dt>
+      <dd>開單時「③ 從哪裡出貨」選 <b>西門</b> 就好。取貨門市和出貨來源是分開的兩件事，每個品項都能各自指定。</dd></div>
+    <div><dt>備貨完成後總數怎麼沒變少？</dt>
+      <dd>正常。備貨只是把貨從倉庫換到店裡，公司的總數當然不變。只有客人真的把貨帶走（預訂單按「確認取貨完成」）總數才會減少。</dd></div>
     <div><dt>為什麼已完成的單不能刪？</dt>
       <dd>那是銷售紀錄，月底要用來對帳。只有「已取消」的紀錄沒有帳務價值，才開放刪除。</dd></div>
   </dl>

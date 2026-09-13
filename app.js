@@ -46,9 +46,9 @@ const CONFIG = {
   POLL_SECONDS: 45          // 每幾秒自動抓一次新留言
 };
 
-const TYPES = { ORDER: '客戶預訂單', TASK: '任務交接', ROUTINE: '例行工作' };
+const TYPES = { ORDER: '客戶預訂單', STOCKUP: '備貨', TASK: '任務交接', ROUTINE: '例行工作' };
 const STATUS = { OPEN: '待處理', DONE: '已完成', CANCEL: '已取消' };
-const STOCK = { RESERVED: '已預留', SHIPPED: '已出庫', RESTORED: '已還原', FAILED: '未扣', NA: '不適用' };
+const STOCK = { RESERVED: '已預留', SHIPPED: '已出庫', TRANSFERRED: '已轉入門市', RESTORED: '已還原', FAILED: '未扣', NA: '不適用' };
 
 const BOARD_HEADERS = [
   'id', '類型', '建立時間', '建立者', '門市', '狀態',
@@ -106,6 +106,24 @@ function toast(msg, kind) {
   el.textContent = msg;
   $('toastHost').appendChild(el);
   setTimeout(() => el.remove(), kind === 'bad' ? 6000 : 3200);
+}
+
+/* --------------------- 庫存來源 / 去向（總倉 + 各門市） ------------------ */
+/** 可選的庫存位置，預設第一個（總倉） */
+function srcOptions() {
+  return [{ col: CONFIG.H.warehouse, label: '總倉' },
+          ...CONFIG.STORES.map(s => ({ col: s.col, label: s.label }))];
+}
+const DEFAULT_SRC = () => CONFIG.H.warehouse;
+/** 欄位標題 → 畫面顯示的名字（三重店 → 三重龍門） */
+function srcLabel(col) {
+  const hit = srcOptions().find(o => o.col === col);
+  return hit ? hit.label : (col || '總倉');
+}
+/** 門市名稱 → 庫存欄位標題 */
+function storeCol(label) {
+  const s = CONFIG.STORES.find(x => x.label === label);
+  return s ? s.col : CONFIG.H.warehouse;
 }
 
 /* ----------------------------- 登入 ------------------------------------ */
@@ -386,26 +404,40 @@ async function refreshAll(msg) {
         原本扣的門市/總倉  +N（照當初的紀錄原路還回）
    ===================================================================== */
 
-/** 算出「建立預訂單」要怎麼扣（不寫入，只回傳計畫，用來預覽＋記錄） */
-function planReserve(items, storeLabel) {
-  const storeCol = CONFIG.STORES.find(s => s.label === storeLabel).col;
-  const used = new Map();                       // sheetRow → 已規劃扣掉的門市/總倉量
+/**
+ * 算出這張單要從哪裡扣多少（不寫入，只回傳計畫，用來預覽＋記錄）
+ * items: [{ row, qty, price, src }]　src = 庫存欄位標題，預設總倉
+ */
+function planReserve(items) {
+  const used = new Map();                       // row|src → 這張單已經規劃扣掉的量
   const plan = [];
   for (const it of items) {
     const p = S.products.byRow.get(it.row);
     if (!p) continue;
-    const u = used.get(it.row) || { store: 0, wh: 0 };
-    const storeAvail = Math.max((p.nums[storeCol] || 0) - u.store, 0);
-    const fromStore = Math.min(it.qty, storeAvail);
-    const fromWh = it.qty - fromStore;
-    const whAvail = (p.nums[CONFIG.H.warehouse] || 0) - u.wh;
-    used.set(it.row, { store: u.store + fromStore, wh: u.wh + fromWh });
+    const src = it.src || DEFAULT_SRC();
+    const k = it.row + '|' + src;
+    const u = used.get(k) || 0;
+    const avail = (p.nums[src] || 0) - u;
+    used.set(k, u + it.qty);
     plan.push({
-      row: it.row, name: p.name, spec: p.spec, qty: it.qty, price: it.price,
-      storeCol, fromStore, fromWh, short: Math.max(fromWh - Math.max(whAvail, 0), 0)
+      row: it.row, name: p.name, spec: p.spec, qty: it.qty,
+      price: it.price || 0, src,
+      short: Math.max(it.qty - Math.max(avail, 0), 0)   // 來源不夠的數量
     });
   }
   return plan;
+}
+
+/** 舊格式（storeCol/fromStore/fromWh）轉成新格式（src/qty），保持舊單可以正常取消或完成 */
+function normPlan(plan) {
+  const out = [];
+  for (const p of (plan || [])) {
+    if (p.src) { out.push(p); continue; }
+    if (p.fromStore) out.push({ ...p, src: p.storeCol, qty: p.fromStore });
+    if (p.fromWh) out.push({ ...p, src: CONFIG.H.warehouse, qty: p.fromWh });
+    if (!p.fromStore && !p.fromWh) out.push({ ...p, src: p.storeCol || CONFIG.H.warehouse });
+  }
+  return out;
 }
 
 /** 品項有可能因為庫存表插入列而位移，優先用「產品名稱＋規格」重新定位 */
@@ -421,33 +453,33 @@ function resolveRow(p) {
 }
 
 /**
- * 把一張單的庫存計畫套用到庫存表。
- *   reserve = 建立預訂單（門市/總倉 -N，預定專區 +N）
- *   ship    = 客人取貨（預定專區 -N，總數才真的減少）
- *   restore = 取消預訂（預定專區 -N，門市/總倉原路 +N）
+ * 把一張單的庫存計畫套用到庫存表：
+ *   reserve  建立單子     來源 −N、預定專區 +N（總數不變）
+ *   ship     客人取貨     預定專區 −N（總數 −N，真正出庫）
+ *   transfer 備貨完成     預定專區 −N、目的地 +N（總數不變，只是換位置）
+ *   restore  取消         預定專區 −N、目的地 +N（沒指定就退回原來源）
  * 寫入前會重新讀一次庫存，避免蓋掉別人剛改的數字。
  */
-async function applyPlan(plan, mode) {
-  if (!plan || !plan.length) return;
+async function applyPlan(plan, mode, dest) {
+  plan = normPlan(plan);
+  if (!plan.length) return;
   await loadProducts();
   const m = new Map();
   const add = (row, h, v) => {
-    if (!v) return;
+    if (!v || !h) return;
     const d = m.get(row) || {}; d[h] = (d[h] || 0) + v; m.set(row, d);
   };
   for (const p of plan) {
     const row = resolveRow(p);
-    const storeCol = p.storeCol || CONFIG.STORES[0].col;
+    const src = p.src || DEFAULT_SRC();
     if (mode === 'reserve') {
-      add(row, storeCol, -(p.fromStore || 0));
-      add(row, CONFIG.H.warehouse, -(p.fromWh || 0));
+      add(row, src, -p.qty);
       add(row, CONFIG.H.reserve, +p.qty);
     } else if (mode === 'ship') {
       add(row, CONFIG.H.reserve, -p.qty);
-    } else if (mode === 'restore') {
+    } else if (mode === 'transfer' || mode === 'restore') {
       add(row, CONFIG.H.reserve, -p.qty);
-      add(row, storeCol, +(p.fromStore || 0));
-      add(row, CONFIG.H.warehouse, +(p.fromWh || 0));
+      add(row, dest || src, +p.qty);
     }
   }
   await writeDeltas(m);
@@ -478,22 +510,13 @@ async function writeDeltas(deltas) {            // deltas: Map(row → {欄位: 
 }
 
 /** 把計畫轉成人看得懂的文字，用在確認視窗 */
-function planText(plan, mode) {
-  return plan.map(p => {
+function planText(plan, mode, dest) {
+  return normPlan(plan).map(p => {
     const name = `${p.name} ${p.spec || ''}`.trim();
-    if (mode === 'reserve') {
-      const bits = [];
-      if (p.fromStore) bits.push(`門市 −${p.fromStore}`);
-      if (p.fromWh) bits.push(`總倉 −${p.fromWh}`);
-      return `・${name} ×${p.qty}　${bits.join('、')} → 預定專區 +${p.qty}`;
-    }
-    if (mode === 'restore') {
-      const bits = [];
-      if (p.fromStore) bits.push(`門市 +${p.fromStore}`);
-      if (p.fromWh) bits.push(`總倉 +${p.fromWh}`);
-      return `・${name} ×${p.qty}　預定專區 −${p.qty} → ${bits.join('、') || '無'}`;
-    }
-    return `・${name} ×${p.qty}`;
+    const src = srcLabel(p.src || DEFAULT_SRC());
+    if (mode === 'reserve') return `・${name} ×${p.qty}　${src} −${p.qty} → 預定專區 +${p.qty}`;
+    if (mode === 'ship') return `・${name} ×${p.qty}　預定專區 −${p.qty}（出庫，總數減少）`;
+    return `・${name} ×${p.qty}　預定專區 −${p.qty} → ${srcLabel(dest || p.src)} +${p.qty}`;
   }).join('\n');
 }
 
@@ -506,8 +529,11 @@ function render() {
   // 待取貨的預訂單：依取貨日期＋時段從最早排到最晚
   const orders = open.filter(r => r['類型'] === TYPES.ORDER)
     .sort((a, b) => (a['取貨日期'] + a['取貨時段']).localeCompare(b['取貨日期'] + b['取貨時段']));
+  // 待備貨：依日期排序
+  const stockups = open.filter(r => r['類型'] === TYPES.STOCKUP)
+    .sort((a, b) => String(a['取貨日期']).localeCompare(String(b['取貨日期'])));
   // 交接事項：最新的在最上面
-  const notes = open.filter(r => r['類型'] !== TYPES.ORDER).reverse();
+  const notes = open.filter(r => r['類型'] !== TYPES.ORDER && r['類型'] !== TYPES.STOCKUP).reverse();
   const closed = rows.filter(r => r['狀態'] !== STATUS.OPEN).reverse().slice(0, 40);
 
   $('pendingCount').textContent = `待處理 ${open.length}`;
@@ -518,6 +544,9 @@ function render() {
   }
   if (orders.length) {
     html += `<div class="sec-title">待取貨預訂單（${orders.length}）· 依取貨時間排序</div>` + orders.map(cardHTML).join('');
+  }
+  if (stockups.length) {
+    html += `<div class="sec-title">待備貨（${stockups.length}）· 依日期排序</div>` + stockups.map(cardHTML).join('');
   }
   if (notes.length) {
     html += `<div class="sec-title">交接事項 / 例行工作（${notes.length}）</div>` + notes.map(cardHTML).join('');
@@ -532,7 +561,8 @@ function parseJSON(s, fb) { try { return JSON.parse(s); } catch (e) { return fb;
 
 function cardHTML(r) {
   const t = r['類型'], done = r['狀態'] !== STATUS.OPEN;
-  const tagCls = t === TYPES.ORDER ? 'tag-order' : t === TYPES.TASK ? 'tag-task' : 'tag-routine';
+  const tagCls = t === TYPES.ORDER ? 'tag-order' : t === TYPES.STOCKUP ? 'tag-stock'
+    : t === TYPES.TASK ? 'tag-task' : 'tag-routine';
   let title = '', body = '';
 
   if (t === TYPES.ORDER) {
@@ -545,6 +575,7 @@ function cardHTML(r) {
       </dl>
       <div class="items">
         ${items.map(i => `<div class="it"><b>${esc(i.name)}${i.spec ? '　' + esc(i.spec) : ''}</b>
+            ${i.src ? `<span class="src">${esc(srcLabel(i.src))} 出</span>` : ''}
             <span>× ${i.qty}</span><span>${money(i.price * i.qty)}</span></div>`).join('')}
         <div class="it sum"><span>合計</span><span>${money(r['金額'])}</span></div>
       </div>`;
@@ -552,6 +583,22 @@ function cardHTML(r) {
       body += `<div class="note bad">⚠ 這張單的庫存還沒扣成功（可能是當時網路中斷）。請按下面的「重試扣庫存」。</div>`;
     } else if (!done && r['庫存狀態'] === STOCK.RESERVED) {
       body += `<div class="note">已從庫存預留這些貨（放在「預定專區」）。客戶取貨後按「確認取貨完成」才會真正出庫。</div>`;
+    }
+  } else if (t === TYPES.STOCKUP) {
+    const items = parseJSON(r['品項JSON'], []);
+    title = `備貨 → ${esc(r['門市'])}`;
+    body = `<dl class="kv">
+        <dt>備貨日期</dt><dd><b>${esc(r['取貨日期'] || '—')}</b></dd>
+        ${r['備註'] ? `<dt>備註</dt><dd>${esc(r['備註'])}</dd>` : ''}
+      </dl>
+      <div class="items">
+        ${items.map(i => `<div class="it"><b>${esc(i.name)}${i.spec ? '　' + esc(i.spec) : ''}</b>
+            <span class="src">${esc(srcLabel(i.src))} 出</span><span>× ${i.qty}</span></div>`).join('')}
+      </div>`;
+    if (r['庫存狀態'] === STOCK.FAILED) {
+      body += `<div class="note bad">⚠ 這張備貨單的庫存還沒扣成功。請按下面的「重試扣庫存」。</div>`;
+    } else if (!done && r['庫存狀態'] === STOCK.RESERVED) {
+      body += `<div class="note">貨已經從來源移到「預定專區」等著送出。實際送到門市後按「備貨完成」，就會轉進 ${esc(r['門市'])} 的庫存（總數不變）。</div>`;
     }
   } else if (t === TYPES.TASK) {
     title = '任務交接';
@@ -565,10 +612,11 @@ function cardHTML(r) {
 
   let statusTag = r['狀態'] === STATUS.DONE ? '<span class="tag tag-done">已完成</span>'
     : r['狀態'] === STATUS.CANCEL ? '<span class="tag tag-cancel">已取消</span>' : '';
-  if (!done && t === TYPES.ORDER && r['取貨日期']) {
+  if (!done && (t === TYPES.ORDER || t === TYPES.STOCKUP) && r['取貨日期']) {
     const d = r['取貨日期'], today = todayStr();
-    if (d < today) statusTag = '<span class="tag tag-alert">已過取貨日</span>';
-    else if (d === today) statusTag = '<span class="tag tag-routine">今天取貨</span>';
+    const word = t === TYPES.ORDER ? '取貨' : '備貨';
+    if (d < today) statusTag = `<span class="tag tag-alert">已過${word}日</span>`;
+    else if (d === today) statusTag = `<span class="tag tag-routine">今天${word}</span>`;
   }
 
   // 修改紀錄（可收合）
@@ -581,7 +629,13 @@ function cardHTML(r) {
   const edit = `<button class="btn btn-sm" data-act="edit" data-id="${esc(r.id)}">✎ 修改</button>`;
   let actions = '';
   if (!done) {
-    if (t === TYPES.ORDER) {
+    if (t === TYPES.STOCKUP) {
+      actions = r['庫存狀態'] === STOCK.FAILED
+        ? `<button class="btn btn-sm btn-primary" data-act="retry" data-id="${esc(r.id)}">重試扣庫存</button>
+           ${edit}<button class="btn btn-sm btn-danger" data-act="cancel" data-id="${esc(r.id)}">取消備貨</button>`
+        : `<button class="btn btn-sm btn-ok" data-act="transfer" data-id="${esc(r.id)}">✓ 備貨完成</button>
+           ${edit}<button class="btn btn-sm btn-danger" data-act="cancel" data-id="${esc(r.id)}">取消備貨</button>`;
+    } else if (t === TYPES.ORDER) {
       if (r['庫存狀態'] === STOCK.FAILED) {
         actions = `<button class="btn btn-sm btn-primary" data-act="retry" data-id="${esc(r.id)}">重試扣庫存</button>
                    ${edit}
@@ -644,23 +698,54 @@ document.addEventListener('click', async e => {
   }
 
   if (act === 'cancel') {
-    const plan = parseJSON(r['庫存異動JSON'], []);
+    const plan = normPlan(parseJSON(r['庫存異動JSON'], []));
     const reserved = r['庫存狀態'] === STOCK.RESERVED;
-    const ok = await confirmModal({
-      title: '要取消這張預訂單嗎？',
-      lines: `<p>客戶：<b>${esc(r['客戶名稱'] || '（無）')}</b></p>` +
+    const isStock = r['類型'] === TYPES.STOCKUP;
+    const backHome = [...new Set(plan.map(p => srcLabel(p.src)))].join('、') || '原來源';
+    const res = await confirmModal({
+      title: isStock ? '要取消這張備貨單嗎？' : '要取消這張預訂單嗎？',
+      lines: `<p>${isStock ? '備貨去向：<b>' + esc(r['門市']) + '</b>' : '客戶：<b>' + esc(r['客戶名稱'] || '（無）') + '</b>'}</p>` +
         (reserved
-          ? `<p style="color:var(--ink-2);font-size:14px">預留的貨會原路還回門市／總倉：</p>
-             <pre class="pre">${esc(planText(plan, 'restore'))}</pre>`
+          ? `<p style="color:var(--ink-2);font-size:14px">預定專區的貨要退回哪裡？（預設退回原來源：${esc(backHome)}）</p>`
           : `<p style="color:var(--ink-2);font-size:14px">這張單的庫存還沒扣，取消不會動到庫存。</p>`),
+      choices: reserved ? {
+        name: 'dest',
+        options: [{ v: '', label: `原來源（${backHome}）` },
+                  ...srcOptions().map(o => ({ v: o.col, label: o.label }))]
+      } : null,
+      preview: reserved ? dest => `<pre class="pre">${esc(planText(plan, 'restore', dest || null))}</pre>` : null,
       okText: '確定取消',
       danger: true
     });
+    if (!res) return;
+    await doAction(b, async () => {
+      if (reserved) await applyPlan(plan, 'restore', res.dest || null);
+      await updateBoardRow(r, {
+        狀態: STATUS.CANCEL, 完成時間: nowStr(), 完成者: userName(), 庫存狀態: STOCK.RESTORED,
+        修改紀錄: (r['修改紀錄'] ? r['修改紀錄'] + '\n' : '')
+          + `${nowStr()} ${userName()}：取消${isStock ? '備貨' : '預訂'}，庫存退回 ${res.dest ? srcLabel(res.dest) : backHome}`
+      });
+      toast('已取消，庫存已退回 ' + (res.dest ? srcLabel(res.dest) : backHome), 'ok');
+    });
+  }
+
+  // 備貨完成 → 把預定專區的貨轉進對應門市（總數不變）
+  if (act === 'transfer') {
+    const plan = normPlan(parseJSON(r['庫存異動JSON'], []));
+    const dest = storeCol(r['門市']);
+    const ok = await confirmModal({
+      title: '備貨已經送到門市了？',
+      lines: `<p>去向：<b>${esc(r['門市'])}</b></p>
+              <p style="color:var(--ink-2);font-size:14px">按下確定後，這些貨會從「預定專區」轉進 ${esc(r['門市'])} 的庫存。
+              <b>總數不會變</b>，只是換了位置。</p>
+              <pre class="pre">${esc(planText(plan, 'transfer', dest))}</pre>`,
+      okText: '確定，已入庫'
+    });
     if (!ok) return;
     await doAction(b, async () => {
-      if (reserved) await applyPlan(plan, 'restore');
-      await updateBoardRow(r, { 狀態: STATUS.CANCEL, 完成時間: nowStr(), 完成者: userName(), 庫存狀態: STOCK.RESTORED });
-      toast('已取消，庫存已還原', 'ok');
+      await applyPlan(plan, 'transfer', dest);
+      await updateBoardRow(r, { 狀態: STATUS.DONE, 完成時間: nowStr(), 完成者: userName(), 庫存狀態: STOCK.TRANSFERRED });
+      toast('備貨完成，已轉入 ' + r['門市'], 'ok');
     });
   }
 
@@ -726,24 +811,47 @@ async function deleteBoardRow(r) {
   });
 }
 
-/** 通用確認視窗，回傳 true / false */
-function confirmModal({ title, lines, okText, danger }) {
+/**
+ * 通用確認視窗。
+ * 取消 → 回傳 null；確定 → 回傳物件（有 choices 時帶著選中的值，例如 { dest: '三重店' }）
+ */
+function confirmModal({ title, lines, okText, danger, choices, preview }) {
   return new Promise(res => {
     const host = document.createElement('div');
+    const chipsHTML = choices ? `<div class="field" style="margin-bottom:10px">
+        <div class="chips" id="cmChips">
+          ${choices.options.map((o, i) => `<button class="chip ${i === 0 ? 'on' : ''}" data-v="${esc(o.v)}">${esc(o.label)}</button>`).join('')}
+        </div>
+      </div>` : '';
     host.innerHTML = `<div class="modal">
       <div class="sheet" style="max-width:460px">
         <div class="sheet-head"><h2>${esc(title)}</h2></div>
-        <div class="sheet-body">${lines}</div>
+        <div class="sheet-body">${lines}${chipsHTML}<div id="cmPreview"></div></div>
         <div class="sheet-foot">
           <button class="btn" data-no>取消</button>
           <button class="btn ${danger ? 'btn-danger-solid' : 'btn-primary'}" data-yes>${esc(okText || '確定')}</button>
         </div>
       </div></div>`;
     document.body.appendChild(host);
+
+    let picked = choices ? choices.options[0].v : undefined;
+    const drawPreview = () => {
+      const el = host.querySelector('#cmPreview');
+      if (preview && el) el.innerHTML = preview(picked);
+    };
+    if (choices) {
+      host.querySelectorAll('#cmChips .chip').forEach(c => c.onclick = () => {
+        picked = c.dataset.v;
+        host.querySelectorAll('#cmChips .chip').forEach(x => x.classList.toggle('on', x === c));
+        drawPreview();
+      });
+    }
+    drawPreview();
+
     const done = v => { host.remove(); res(v); };
-    host.querySelector('[data-no]').onclick = () => done(false);
-    host.querySelector('[data-yes]').onclick = () => done(true);
-    host.querySelector('.modal').onclick = ev => { if (ev.target.classList.contains('modal')) done(false); };
+    host.querySelector('[data-no]').onclick = () => done(null);
+    host.querySelector('[data-yes]').onclick = () => done(choices ? { [choices.name]: picked } : {});
+    host.querySelector('.modal').onclick = ev => { if (ev.target.classList.contains('modal')) done(null); };
   });
 }
 
@@ -756,6 +864,7 @@ async function doAction(btn, fn) {
   finally { S.busy = false; btn.disabled = false; btn.textContent = old; }
 }
 
+/** 更新留言板某一列的部分欄位 */
 async function updateBoardRow(r, patch) {
   const data = [];
   for (const k of Object.keys(patch)) {
@@ -790,7 +899,8 @@ function openForm(editId) {
         const byName = !p && i.name ? (S.products.byName.get(i.name) || [])
           .find(x => String(x.spec || '') === String(i.spec || '')) : null;
         const hit = p || byName;
-        return { name: hit ? hit.name : (i.name || ''), row: hit ? hit.sheetRow : i.row, qty: i.qty, price: i.price };
+        return { name: hit ? hit.name : (i.name || ''), row: hit ? hit.sheetRow : i.row,
+                 qty: i.qty, price: i.price || 0, src: i.src || i.storeCol || DEFAULT_SRC() };
       })
     };
     if (!FORM.items.length) FORM.items = [newItem()];
@@ -848,10 +958,29 @@ function openForm(editId) {
   renderFormBody();
 }
 function closeForm() { $('modalHost').innerHTML = ''; FORM = null; }
-function newItem() { return { name: '', row: null, qty: 1, price: 0 }; }
+function newItem() { return { name: '', row: null, qty: 1, price: 0, src: DEFAULT_SRC() }; }
 
 function renderFormBody() {
   const b = $('formBody');
+
+  if (FORM.type === TYPES.STOCKUP) {
+    b.innerHTML = `
+      <div class="field"><label>備貨日期 <span class="req">*</span></label>
+        <input type="date" id="fDate" value="${FORM.date || todayStr()}"></div>
+      <div class="field"><label>備貨品項 <span class="req">*</span></label>
+        <div id="itemRows"></div>
+        <button class="btn add-item" id="addItem">＋ 增加品項</button>
+      </div>
+      <div class="field"><label>備註</label>
+        <textarea id="fNote" placeholder="例如：週三送貨車一起帶過去">${esc(FORM.note || '')}</textarea></div>`;
+    FORM.date = FORM.date || todayStr();
+    $('fDate').oninput = e => FORM.date = e.target.value;
+    $('fNote').oninput = e => FORM.note = e.target.value;
+    $('addItem').onclick = () => { FORM.items.push(newItem()); renderItems(); };
+    renderItems();
+    return;
+  }
+
   if (FORM.type === TYPES.TASK) {
     b.innerHTML = `<div class="field">
         <label>交接內容 <span class="req">*</span></label>
@@ -926,19 +1055,18 @@ function stockText(p) {
 }
 
 function stockBrief(p) {
-  const parts = CONFIG.STORES.map(s => `${s.label} ${p.nums[s.col] || 0}`);
-  parts.push(`倉 ${p.nums[CONFIG.H.warehouse] || 0}`);
-  const storeCol = CONFIG.STORES.find(s => s.label === FORM.store).col;
-  const z = (p.nums[storeCol] || 0) <= 0 ? '  ⚠本店無現貨' : '';
-  return `（${parts.join(' / ')}）${z}`;
+  const parts = srcOptions().map(o => `${o.label} ${p.nums[o.col] || 0}`);
+  return `（${parts.join(' / ')}）`;
 }
 
 function renderItems() {
   const host = $('itemRows');
   const names = S.products.names;
+  const isStock = FORM.type === TYPES.STOCKUP;
   host.innerHTML = FORM.items.map((it, i) => {
     const p = it.row ? S.products.byRow.get(it.row) : null;
     const variants = it.name ? (S.products.byName.get(it.name) || []) : [];
+    const srcQty = p ? (p.nums[it.src || DEFAULT_SRC()] || 0) : 0;
     return `<div class="item-row" data-i="${i}">
       <div class="two">
         <div class="f"><label>① 產品名稱</label>
@@ -953,13 +1081,21 @@ function renderItems() {
             ${variants.map(v => `<option value="${v.sheetRow}"${v.sheetRow === it.row ? ' selected' : ''}>${esc(v.spec || '（無規格）')}${esc(stockBrief(v))}</option>`).join('')}
           </select>
         </div>
+        <div class="f"><label>③ 從哪裡出貨</label>
+          <select class="itemSrc">
+            ${srcOptions().map(o => `<option value="${esc(o.col)}"${(it.src || DEFAULT_SRC()) === o.col ? ' selected' : ''}>${esc(o.label)}${p ? `（現有 ${p.nums[o.col] || 0}）` : ''}</option>`).join('')}
+          </select>
+        </div>
       </div>
-      <div class="stockline${p ? '' : ' hidden'}">${p ? esc(stockText(p)) + '　·　售價 ' + money(p.price) : ''}</div>
+      ${p ? `<div class="stockline${it.qty > srcQty ? ' short' : ''}">
+          ${esc(srcLabel(it.src || DEFAULT_SRC()))}現有 <b>${srcQty}</b>${it.qty > srcQty ? `　⚠ 不足 ${it.qty - srcQty}，送出後會變負數` : ''}
+          ${isStock ? '' : `　·　售價 ${money(p.price)}`}</div>` : ''}
       <div class="r2">
         <div class="f"><label>數量</label><input type="number" class="itemQty" min="1" step="1" value="${it.qty}"></div>
+        ${isStock ? '' : `
         <div class="f"><label>銷售價格（單價）</label><input type="number" class="itemPrice" min="0" step="1" value="${it.price}"></div>
         <div class="f" style="max-width:110px"><label>小計</label>
-          <input type="text" value="${money(it.qty * it.price)}" readonly style="background:#f1f5f9"></div>
+          <input type="text" value="${money(it.qty * it.price)}" readonly style="background:#f1f5f9"></div>`}
         ${FORM.items.length > 1 ? `<button class="del" title="刪除這個品項">✕</button>` : ''}
       </div>
     </div>`;
@@ -981,14 +1117,23 @@ function renderItems() {
       if (p) it.price = p.price;
       renderItems(); updateTotal();
     };
-    row.querySelector('.itemQty').oninput = e => { it.qty = Math.max(1, +e.target.value || 1); updateTotal(); syncSub(row, it); };
-    row.querySelector('.itemPrice').oninput = e => { it.price = Math.max(0, +e.target.value || 0); updateTotal(); syncSub(row, it); };
+    row.querySelector('.itemSrc').onchange = e => { it.src = e.target.value; renderItems(); };
+    row.querySelector('.itemQty').oninput = e => {
+      it.qty = Math.max(1, +e.target.value || 1);
+      updateTotal(); syncSub(row, it);
+    };
+    const pr = row.querySelector('.itemPrice');
+    if (pr) pr.oninput = e => { it.price = Math.max(0, +e.target.value || 0); updateTotal(); syncSub(row, it); };
     const del = row.querySelector('.del');
     if (del) del.onclick = () => { FORM.items.splice(i, 1); renderItems(); updateTotal(); };
   });
   updateTotal();
 }
-function syncSub(row, it) { row.querySelector('.r2 .f:nth-child(3) input').value = money(it.qty * it.price); }
+
+function syncSub(row, it) {
+  const el = row.querySelector('.r2 .f:nth-child(3) input');
+  if (el) el.value = money(it.qty * it.price);
+}
 function formTotal() { return FORM.items.reduce((s, i) => s + (i.qty * i.price), 0); }
 function updateTotal() { const el = $('fTotal'); if (el) el.textContent = money(formTotal()); }
 
@@ -1010,40 +1155,57 @@ async function submitForm() {
     if (!FORM.routines.length) return alert('請至少勾選一項例行工作');
     f['例行工作項目'] = FORM.routines.join('\n');
     f['備註'] = (FORM.note || '').trim();
+  } else if (t === TYPES.STOCKUP) {
+    if (!FORM.date) return alert('請選擇備貨日期');
+    const items = FORM.items.filter(i => i.row).map(i => ({ row: i.row, qty: i.qty, price: 0, src: i.src || DEFAULT_SRC() }));
+    if (!items.length) return alert('請選擇備貨品項：先選「產品名稱」，再選「產品規格」');
+    plan = planReserve(items);
+    f['取貨日期'] = FORM.date;
+    f['備註'] = (FORM.note || '').trim();
+    f['品項明細'] = plan.map(p => `${p.name} ${p.spec} ×${p.qty}（${srcLabel(p.src)}出）`).join('\n');
+    f['品項JSON'] = JSON.stringify(plan.map(p =>
+      ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, price: 0, src: p.src })));
+    f['庫存異動JSON'] = JSON.stringify(plan.map(p =>
+      ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, src: p.src })));
   } else {
     if (!(FORM.cName || '').trim()) return alert('請填寫客戶名稱');
     if (!FORM.date) return alert('請選擇預計取貨日期');
-    const items = FORM.items.filter(i => i.row).map(i => ({ row: i.row, qty: i.qty, price: i.price }));
+    const items = FORM.items.filter(i => i.row).map(i => ({ row: i.row, qty: i.qty, price: i.price, src: i.src || DEFAULT_SRC() }));
     if (!items.length) return alert('請選擇預訂品項：先選「產品名稱」，再選「產品規格」');
 
-    plan = planReserve(items, FORM.store);
+    plan = planReserve(items);
     f['客戶名稱'] = FORM.cName.trim();
     f['客戶來源'] = FORM.source;
     f['取貨日期'] = FORM.date;
     f['取貨時段'] = FORM.slot;
     f['金額'] = formTotal();
     f['備註'] = (FORM.note || '').trim();
-    f['品項明細'] = plan.map(p => `${p.name} ${p.spec} ×${p.qty}`).join('\n');
+    f['品項明細'] = plan.map(p => `${p.name} ${p.spec} ×${p.qty}（${srcLabel(p.src)}出）`).join('\n');
     f['品項JSON'] = JSON.stringify(plan.map(p =>
-      ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, price: p.price })));
+      ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, price: p.price, src: p.src })));
     f['庫存異動JSON'] = JSON.stringify(plan.map(p =>
-      ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, storeCol: p.storeCol, fromStore: p.fromStore, fromWh: p.fromWh })));
+      ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, src: p.src })));
   }
   f['門市'] = FORM.store;
 
   const shorts = plan ? plan.filter(p => p.short > 0) : [];
   const shortHTML = shorts.length
-    ? `<div class="warn-box">⚠ 以下品項連總倉都不足，送出後庫存會變成負數，請先確認能不能跟廠商調貨：<br>
-       ${shorts.map(p => `・${esc(p.name)} ${esc(p.spec)}（缺 ${p.short}）`).join('<br>')}</div>`
+    ? `<div class="warn-box">⚠ 以下品項在你選的出貨來源不足，送出後庫存會變成負數：<br>
+       ${shorts.map(p => `・${esc(p.name)} ${esc(p.spec)}　${esc(srcLabel(p.src))}缺 ${p.short}`).join('<br>')}<br>
+       可以改從別的門市或總倉出貨，或先確認能不能調到貨。</div>`
     : '';
 
   /* ══════════════ 新增 ══════════════ */
   if (!editing) {
     if (plan) {
+      const isStock = t === TYPES.STOCKUP;
       const ok = await confirmModal({
-        title: '確認這張預訂單',
-        lines: `<p style="color:var(--ink-2);font-size:14px">送出後庫存會這樣動（總數不變，客人取貨按「確認完成」時才真正出庫）：</p>
-                <pre class="pre">${esc(planText(plan, 'reserve'))}</pre>${shortHTML}`,
+        title: isStock ? '確認這張備貨單' : '確認這張預訂單',
+        lines: `<p style="color:var(--ink-2);font-size:14px">送出後庫存會這樣動（總數不變，貨先移到「預定專區」）：</p>
+                <pre class="pre">${esc(planText(plan, 'reserve'))}</pre>
+                <p style="color:var(--ink-2);font-size:14px">${isStock
+                  ? '等貨實際送到 <b>' + esc(FORM.store) + '</b> 後，按「備貨完成」就會轉進該門市的庫存。'
+                  : '客人取貨按「確認取貨完成」時，總數才會真正減少。'}</p>${shortHTML}`,
         okText: '確定送出'
       });
       if (!ok) return;
@@ -1084,10 +1246,10 @@ async function submitForm() {
 
   /* ══════════════ 修改 ══════════════ */
   const LABEL = {
-    門市: '對應門市', 客戶名稱: '客戶名稱', 客戶來源: '客戶來源',
-    取貨日期: '取貨日期', 取貨時段: '取貨時段', 金額: '金額',
+    客戶名稱: '客戶名稱', 客戶來源: '客戶來源',
+    取貨日期: (t === TYPES.STOCKUP ? '備貨日期' : '取貨日期'), 取貨時段: '取貨時段', 金額: '金額',
     備註: (t === TYPES.TASK ? '交接內容' : '備註'),
-    品項明細: '品項', 例行工作項目: '例行工作'
+    品項明細: '品項', 例行工作項目: '例行工作', 門市: (t === TYPES.STOCKUP ? '備貨去向門市' : '對應門市')
   };
   const oneLine = s => String(s).replace(/\n/g, ' ／ ');
   const changes = [], patch = {};
