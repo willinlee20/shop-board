@@ -928,10 +928,12 @@ function openForm(editId) {
       })
     };
     if (!FORM.items.length) FORM.items = [newItem()];
+    FORM.groups = groupsFromItems(FORM.items);
   } else {
     FORM = {
       editId: null, type: TYPES.ORDER, store: CONFIG.STORES[0].label,
-      source: CONFIG.SOURCES[0], slot: CONFIG.SLOTS[0], routines: [], items: [newItem()]
+      source: CONFIG.SOURCES[0], slot: CONFIG.SLOTS[0], routines: [],
+      items: [newItem()], groups: [newGroup()]
     };
   }
 
@@ -982,6 +984,11 @@ function openForm(editId) {
   renderFormBody();
 }
 function closeForm() { $('modalHost').innerHTML = ''; FORM = null; }
+/** 備貨用：一個群組 = 一支產品 + 一個出貨來源 + 各規格的數量 */
+function newGroup() {
+  return { cat: S.lastCat || null, name: '', src: S.lastSrc || DEFAULT_SRC(), qty: {} };
+}
+
 function newItem() {
   // 分類與出貨來源都沿用上一次選的，同事連續選同一類時不用重選
   return { name: '', row: null, qty: 1, price: 0, src: S.lastSrc || DEFAULT_SRC(), cat: S.lastCat || null };
@@ -995,16 +1002,17 @@ function renderFormBody() {
       <div class="field"><label>備貨日期 <span class="req">*</span></label>
         <input type="date" id="fDate" value="${FORM.date || todayStr()}"></div>
       <div class="field"><label>備貨品項 <span class="req">*</span></label>
-        <div id="itemRows"></div>
-        <button class="btn add-item" id="addItem">＋ 增加品項</button>
+        <div id="groupRows"></div>
+        <button class="btn add-item" id="addGroup">＋ 增加另一個產品</button>
+        <div class="total-bar"><span>合計</span><span id="gTotal">0 項 · 0 件</span></div>
       </div>
       <div class="field"><label>備註</label>
         <textarea id="fNote" placeholder="例如：週三送貨車一起帶過去">${esc(FORM.note || '')}</textarea></div>`;
     FORM.date = FORM.date || todayStr();
     $('fDate').oninput = e => FORM.date = e.target.value;
     $('fNote').oninput = e => FORM.note = e.target.value;
-    $('addItem').onclick = () => { FORM.items.push(newItem()); renderItems(); };
-    renderItems();
+    $('addGroup').onclick = () => { FORM.groups.push(newGroup()); renderGroups(); };
+    renderGroups();
     return;
   }
 
@@ -1079,6 +1087,139 @@ function stockText(p) {
   const res = p.nums[CONFIG.H.reserve] || 0;
   if (res) parts.push(`已預訂 ${res}`);
   return parts.join('　/　');
+}
+
+/** 把品項清單還原成備貨用的群組（同一支產品 + 同一個來源歸成一組） */
+function groupsFromItems(items) {
+  const map = new Map(), out = [];
+  for (const it of items) {
+    if (!it.row) continue;
+    const p = S.products.byRow.get(it.row);
+    if (!p) continue;
+    const src = it.src || DEFAULT_SRC();
+    const k = p.name + '|' + src;
+    if (!map.has(k)) {
+      const g = { cat: p.cat, name: p.name, src, qty: {} };
+      map.set(k, g); out.push(g);
+    }
+    map.get(k).qty[it.row] = (map.get(k).qty[it.row] || 0) + it.qty;
+  }
+  return out.length ? out : [newGroup()];
+}
+
+/** 把備貨群組展開成品項清單 */
+function itemsFromGroups(groups) {
+  const items = [];
+  for (const g of (groups || [])) {
+    for (const row of Object.keys(g.qty)) {
+      const n = Number(g.qty[row]) || 0;
+      if (n > 0) items.push({ row: +row, qty: n, price: 0, src: g.src || DEFAULT_SRC() });
+    }
+  }
+  return items;
+}
+
+function groupTotals(groups) {
+  const items = itemsFromGroups(groups);
+  return { kinds: items.length, pieces: items.reduce((s, i) => s + i.qty, 0) };
+}
+
+function updateGroupTotal() {
+  const el = $('gTotal');
+  if (!el) return;
+  const t = groupTotals(FORM.groups);
+  el.textContent = `${t.kinds} 項 · ${t.pieces} 件`;
+}
+
+/** 備貨的品項輸入：分類 → 產品名稱 → 一次填多個規格的數量 → 選出貨來源 */
+function renderGroups() {
+  const host = $('groupRows');
+  const P = S.products;
+
+  host.innerHTML = FORM.groups.map((g, i) => {
+    const cat = g.cat || S.lastCat || (P.cats[0] || ALL_CAT);
+    const names = (!P.hasCats || cat === ALL_CAT) ? P.names : (P.byCat.get(cat) || []);
+    const variants = g.name ? (P.byName.get(g.name) || []) : [];
+    const src = g.src || DEFAULT_SRC();
+
+    const tabs = P.hasCats ? `<div class="cat-tabs">
+        ${P.cats.map(c => `<button class="cat-tab${c === cat ? ' on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}
+        <button class="cat-tab${cat === ALL_CAT ? ' on' : ''}" data-cat="${ALL_CAT}">全部</button>
+      </div>` : '';
+
+    const specs = variants.length ? `
+      <div class="spec-list">
+        <div class="spec-head"><span>規格</span><span class="sq">${esc(srcLabel(src))}現有</span><span class="qt">數量</span></div>
+        ${variants.map(v => {
+          const have = v.nums[src] || 0;
+          const q = g.qty[v.sheetRow] || '';
+          return `<div class="spec-row${q ? ' has' : ''}" data-row="${v.sheetRow}">
+            <span class="nm">${esc(v.spec || '（無規格）')}</span>
+            <span class="sq${have <= 0 ? ' zero' : ''}">${have}</span>
+            <input type="number" class="gq" min="0" step="1" placeholder="0" value="${q}" data-row="${v.sheetRow}">
+          </div>`;
+        }).join('')}
+      </div>` : (g.name ? '' : `<div class="spec-empty">選好產品名稱後，這裡會列出所有規格，直接填數量即可</div>`);
+
+    return `<div class="group-box" data-i="${i}">
+      <div class="group-top">
+        <span class="group-n">產品 ${i + 1}</span>
+        ${FORM.groups.length > 1 ? `<button class="del" title="刪除這個產品">✕</button>` : ''}
+      </div>
+      ${tabs}
+      <div class="f"><label>產品名稱</label>
+        <select class="gName">
+          <option value="">— 請選擇（${names.length} 項）—</option>
+          ${names.map(n => `<option value="${esc(n)}"${n === g.name ? ' selected' : ''}>${esc(n)}</option>`).join('')}
+        </select>
+      </div>
+      ${specs}
+      <div class="f" style="margin-top:10px"><label>這批從哪裡出貨</label>
+        <select class="gSrc">
+          ${srcOptions().map(o => `<option value="${esc(o.col)}"${src === o.col ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}
+        </select>
+      </div>
+    </div>`;
+  }).join('');
+
+  host.querySelectorAll('.group-box').forEach(box => {
+    const i = +box.dataset.i, g = FORM.groups[i];
+
+    box.querySelectorAll('.cat-tab').forEach(t => t.onclick = () => {
+      g.cat = t.dataset.cat;
+      S.lastCat = g.cat;
+      const names = g.cat === ALL_CAT ? S.products.names : (S.products.byCat.get(g.cat) || []);
+      if (g.name && !names.includes(g.name)) { g.name = ''; g.qty = {}; }
+      renderGroups();
+    });
+
+    box.querySelector('.gName').onchange = e => {
+      g.name = e.target.value;
+      g.qty = {};                               // 換產品就清掉原本填的數量
+      const p = (S.products.byName.get(g.name) || [])[0];
+      if (p) g.cat = p.cat;
+      renderGroups(); updateGroupTotal();
+    };
+
+    box.querySelector('.gSrc').onchange = e => {
+      g.src = e.target.value;
+      S.lastSrc = g.src;
+      renderGroups();
+    };
+
+    box.querySelectorAll('.gq').forEach(inp => {
+      inp.oninput = e => {
+        const n = Math.max(0, +e.target.value || 0);
+        if (n) g.qty[e.target.dataset.row] = n; else delete g.qty[e.target.dataset.row];
+        e.target.closest('.spec-row').classList.toggle('has', !!n);
+        updateGroupTotal();
+      };
+    });
+
+    const del = box.querySelector('.del');
+    if (del) del.onclick = () => { FORM.groups.splice(i, 1); renderGroups(); updateGroupTotal(); };
+  });
+  updateGroupTotal();
 }
 
 function stockBrief(p) {
@@ -1209,8 +1350,8 @@ async function submitForm() {
     f['備註'] = (FORM.note || '').trim();
   } else if (t === TYPES.STOCKUP) {
     if (!FORM.date) return alert('請選擇備貨日期');
-    const items = FORM.items.filter(i => i.row).map(i => ({ row: i.row, qty: i.qty, price: 0, src: i.src || DEFAULT_SRC() }));
-    if (!items.length) return alert('請選擇備貨品項：先選「產品名稱」，再選「產品規格」');
+    const items = itemsFromGroups(FORM.groups);
+    if (!items.length) return alert('請填寫備貨數量：選好產品名稱後，在要備的規格後面填數字');
     plan = planReserve(items);
     f['取貨日期'] = FORM.date;
     f['備註'] = (FORM.note || '').trim();
