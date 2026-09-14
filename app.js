@@ -5,8 +5,8 @@
    ========================================================================= */
 
 /* ----------------------------- 版本 ------------------------------------ */
-const APP_VERSION = '1.5';          // 每次改版都會更新，畫面右上角看得到
-const APP_DATE = '2026-09-13';
+const APP_VERSION = '1.6';          // 每次改版都會更新，畫面右上角看得到
+const APP_DATE = '2026-09-14';
 
 /* ----------------------------- 設定區 -----------------------------------
    要改的東西都在這裡，下面的程式不用動。
@@ -60,10 +60,10 @@ const BOARD_HEADERS = [
   '客戶名稱', '客戶來源', '取貨日期', '取貨時段',
   '品項明細', '金額', '備註', '例行工作項目',
   '完成時間', '完成者', '品項JSON', '庫存異動JSON', '庫存狀態',
-  '最後修改時間', '最後修改者', '修改紀錄'
+  '最後修改時間', '最後修改者', '修改紀錄', '關聯單號'
 ];
 const C = {}; BOARD_HEADERS.forEach((h, i) => C[h] = i);   // 欄位 → 索引
-const BOARD_LAST_COL = 'V';
+const BOARD_LAST_COL = 'W';
 
 /* ----------------------------- 狀態 ------------------------------------ */
 const S = {
@@ -613,7 +613,7 @@ function cardHTML(r) {
     }
   } else if (t === TYPES.STOCKUP) {
     const items = parseJSON(r['品項JSON'], []);
-    title = `備貨 → ${esc(r['門市'])}`;
+    title = r['關聯單號'] ? `送貨到 ${esc(r['門市'])}` : `備貨 → ${esc(r['門市'])}`;
     body = `<dl class="kv">
         <dt>備貨日期</dt><dd><b>${esc(r['取貨日期'] || '—')}</b></dd>
         ${r['備註'] ? `<dt>備註</dt><dd>${esc(r['備註'])}</dd>` : ''}
@@ -622,8 +622,15 @@ function cardHTML(r) {
         ${items.map(i => `<div class="it"><b>${esc(i.name)}${i.spec ? '　' + esc(i.spec) : ''}</b>
             <span class="src">${esc(srcLabel(i.src))} 出</span><span>× ${i.qty}</span></div>`).join('')}
       </div>`;
+    if (r['關聯單號']) {
+      body = `<div class="alert-box big">🚚 從總倉調度，請協助備貨
+        <span>客人在 ${esc(r['門市'])} 取貨，但貨在總倉。請把下面的貨送到門市。</span></div>` + body;
+    }
     if (r['庫存狀態'] === STOCK.FAILED) {
       body += `<div class="note bad">⚠ 這張備貨單的庫存還沒扣成功。請按下面的「重試扣庫存」。</div>`;
+    } else if (r['關聯單號']) {
+      if (!done) body += `<div class="note">這張單<b>不會動庫存</b>——貨已經在預訂單送出時預留好了。
+        送到門市後按「已送達」就好，客人取貨請到那張預訂單按「確認取貨完成」。</div>`;
     } else if (!done && r['庫存狀態'] === STOCK.RESERVED) {
       body += `<div class="note">貨已經從來源移到「預定專區」等著送出。實際送到門市後按「備貨完成」，就會轉進 ${esc(r['門市'])} 的庫存（總數不變）。</div>`;
     }
@@ -660,7 +667,7 @@ function cardHTML(r) {
       actions = r['庫存狀態'] === STOCK.FAILED
         ? `<button class="btn btn-sm btn-primary" data-act="retry" data-id="${esc(r.id)}">重試扣庫存</button>
            ${edit}<button class="btn btn-sm btn-danger" data-act="cancel" data-id="${esc(r.id)}">取消備貨</button>`
-        : `<button class="btn btn-sm btn-ok" data-act="transfer" data-id="${esc(r.id)}">✓ 備貨完成</button>
+        : `<button class="btn btn-sm btn-ok" data-act="transfer" data-id="${esc(r.id)}">✓ ${r['關聯單號'] ? '已送達門市' : '備貨完成'}</button>
            ${edit}<button class="btn btn-sm btn-danger" data-act="cancel" data-id="${esc(r.id)}">取消備貨</button>`;
     } else if (t === TYPES.ORDER) {
       if (r['庫存狀態'] === STOCK.FAILED) {
@@ -760,19 +767,27 @@ document.addEventListener('click', async e => {
   if (act === 'transfer') {
     const plan = normPlan(parseJSON(r['庫存異動JSON'], []));
     const dest = storeCol(r['門市']);
+    const linked = !!r['關聯單號'];               // 跟著預訂單開的送貨提醒單：不動庫存
     const ok = await confirmModal({
-      title: '備貨已經送到門市了？',
-      lines: `<p>去向：<b>${esc(r['門市'])}</b></p>
-              <p style="color:var(--ink-2);font-size:14px">按下確定後，這些貨會從「預定專區」轉進 ${esc(r['門市'])} 的庫存。
-              <b>總數不會變</b>，只是換了位置。</p>
-              <pre class="pre">${esc(planText(plan, 'transfer', dest))}</pre>`,
-      okText: '確定，已入庫'
+      title: linked ? '貨已經送到門市了？' : '備貨已經送到門市了？',
+      lines: linked
+        ? `<p>去向：<b>${esc(r['門市'])}</b>　（配合預訂單 ${esc(r['關聯單號'])}）</p>
+           <p style="color:var(--ink-2);font-size:14px">這張是送貨提醒單，<b>不會動到庫存</b>。
+           貨還是留在「預定專區」，等客人來取貨時，請到那張預訂單按「確認取貨完成」。</p>`
+        : `<p>去向：<b>${esc(r['門市'])}</b></p>
+           <p style="color:var(--ink-2);font-size:14px">按下確定後，這些貨會從「預定專區」轉進 ${esc(r['門市'])} 的庫存。
+           <b>總數不會變</b>，只是換了位置。</p>
+           <pre class="pre">${esc(planText(plan, 'transfer', dest))}</pre>`,
+      okText: linked ? '確定，已送達' : '確定，已入庫'
     });
     if (!ok) return;
     await doAction(b, async () => {
-      await applyPlan(plan, 'transfer', dest);
-      await updateBoardRow(r, { 狀態: STATUS.DONE, 完成時間: nowStr(), 完成者: userName(), 庫存狀態: STOCK.TRANSFERRED });
-      toast('備貨完成，已轉入 ' + r['門市'], 'ok');
+      if (!linked) await applyPlan(plan, 'transfer', dest);
+      await updateBoardRow(r, {
+        狀態: STATUS.DONE, 完成時間: nowStr(), 完成者: userName(),
+        庫存狀態: linked ? STOCK.NA : STOCK.TRANSFERRED
+      });
+      toast(linked ? '已標記送達 ' + r['門市'] : '備貨完成，已轉入 ' + r['門市'], 'ok');
     });
   }
 
@@ -1273,6 +1288,8 @@ function renderItems() {
       ${p ? `<div class="stockline${it.qty > srcQty ? ' short' : ''}">
           ${esc(srcLabel(it.src || DEFAULT_SRC()))}現有 <b>${srcQty}</b>${it.qty > srcQty ? `　⚠ 不足 ${it.qty - srcQty}，送出後會變負數` : ''}
           ${isStock ? '' : `　·　售價 ${money(p.price)}`}</div>` : ''}
+      ${(!isStock && p && (it.src || DEFAULT_SRC()) === CONFIG.H.warehouse)
+        ? `<div class="warehouse-alert">🚚 從總倉調度，請協助備貨<span>送出後會自動幫你開一張備貨單，提醒把貨送到 ${esc(FORM.store)}</span></div>` : ''}
       <div class="r2">
         <div class="f"><label>數量</label><input type="number" class="itemQty" min="1" step="1" value="${it.qty}"></div>
         ${isStock ? '' : `
@@ -1394,18 +1411,31 @@ async function submitForm() {
 
   /* ══════════════ 新增 ══════════════ */
   if (!editing) {
+    let wantStockup = null;              // 要不要順便開一張「從總倉調度」的備貨單
     if (plan) {
       const isStock = t === TYPES.STOCKUP;
-      const ok = await confirmModal({
+      const fromWh = isStock ? [] : plan.filter(p => p.src === CONFIG.H.warehouse);
+      const whHTML = fromWh.length ? `<div class="alert-box">🚚 <b>從總倉調度，請協助備貨</b><br>
+        以下品項在總倉，不在 ${esc(FORM.store)}，客人取貨前要有人先把貨送過去：<br>
+        ${fromWh.map(p => `・${esc(p.name)} ${esc(p.spec)} ×${p.qty}`).join('<br>')}</div>` : '';
+
+      const res = await confirmModal({
         title: isStock ? '確認這張備貨單' : '確認這張預訂單',
-        lines: `<p style="color:var(--ink-2);font-size:14px">送出後庫存會這樣動（總數不變，貨先移到「預定專區」）：</p>
+        lines: `${whHTML}
+                <p style="color:var(--ink-2);font-size:14px">送出後庫存會這樣動（總數不變，貨先移到「預定專區」）：</p>
                 <pre class="pre">${esc(planText(plan, 'reserve'))}</pre>
                 <p style="color:var(--ink-2);font-size:14px">${isStock
                   ? '等貨實際送到 <b>' + esc(FORM.store) + '</b> 後，按「備貨完成」就會轉進該門市的庫存。'
                   : '客人取貨按「確認取貨完成」時，總數才會真正減少。'}</p>${shortHTML}`,
+        choices: fromWh.length ? {
+          name: 'mkStock',
+          options: [{ v: '1', label: '同時開一張備貨單（建議）' },
+                    { v: '', label: '不用，我自己去總倉拿' }]
+        } : null,
         okText: '確定送出'
       });
-      if (!ok) return;
+      if (!res) return;
+      wantStockup = fromWh.length && res.mkStock === '1' ? fromWh : null;
     }
     const id = 'M' + Date.now().toString(36).toUpperCase();
     const values = new Array(BOARD_HEADERS.length).fill('');
@@ -1430,8 +1460,12 @@ async function submitForm() {
           alert('留言已送出，但庫存預留失敗：\n' + err.message + '\n\n請在卡片上按「重試扣庫存」。');
         }
       }
+      if (wantStockup) {
+        try { await createCompanionStockup(id, wantStockup); }
+        catch (err) { alert('預訂單已送出，但自動開立備貨單失敗：\n' + err.message + '\n\n請手動開一張備貨單。'); }
+      }
       closeForm();
-      await refreshAll('留言已送出');
+      await refreshAll(wantStockup ? '已送出，並開了一張備貨單' : '留言已送出');
     } catch (err) {
       alert('送出失敗：\n\n' + err.message);
     } finally {
@@ -1499,6 +1533,31 @@ ${esc(planText(plan, 'reserve'))}</pre>${shortHTML}` : ''}`,
     S.busy = false;
     if ($('submitForm')) { btn.disabled = false; btn.textContent = '儲存修改'; }
   }
+}
+
+/**
+ * 預訂單有品項從總倉出貨時，自動開一張「跟單備貨單」提醒把貨送到門市。
+ * 這張單【不動庫存】——貨已經在預訂單送出時移到預定專區了，再扣一次會重複。
+ */
+async function createCompanionStockup(orderId, whItems) {
+  const values = new Array(BOARD_HEADERS.length).fill('');
+  const id = 'S' + Date.now().toString(36).toUpperCase();
+  values[C['id']] = id;
+  values[C['類型']] = TYPES.STOCKUP;
+  values[C['建立時間']] = nowStr();
+  values[C['建立者']] = userName();
+  values[C['門市']] = FORM.store;
+  values[C['狀態']] = STATUS.OPEN;
+  values[C['取貨日期']] = FORM.date || todayStr();
+  values[C['品項明細']] = whItems.map(p => `${p.name} ${p.spec} ×${p.qty}（總倉出）`).join('\n');
+  values[C['品項JSON']] = JSON.stringify(whItems.map(p =>
+    ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, price: 0, src: p.src })));
+  values[C['庫存異動JSON']] = '[]';            // 空的 → 完成或取消時都不會動庫存
+  values[C['庫存狀態']] = STOCK.NA;
+  values[C['關聯單號']] = orderId;
+  values[C['備註']] = `配合預訂單「${(FORM.cName || '').trim()}」（${orderId}）從總倉調度到 ${FORM.store}。`
+    + `貨已由預訂單預留在「預定專區」，這張單只是提醒送貨，不會再動庫存。`;
+  await appendRow(S.boardTitle, values);
 }
 
 /* ----------------------------- 事件綁定 -------------------------------- */

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="1.5">
+<meta name="app-version" content="1.6">
 <title>工作留言板｜三重龍門 × 西門</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -119,6 +119,20 @@ main{max-width:1040px;margin:0 auto;padding:16px 16px 80px}
   font-family:inherit;font-size:13.5px;line-height:1.7;white-space:pre-wrap;
   margin:0 0 12px;max-height:40vh;overflow:auto;
 }
+.warehouse-alert{
+  margin-top:8px;background:var(--warn-soft);border:1px solid #fcd34d;border-left:4px solid var(--warn);
+  border-radius:8px;padding:8px 11px;font-size:13px;font-weight:700;color:#92400e;line-height:1.6;
+}
+.warehouse-alert span{display:block;font-weight:400;font-size:12px;margin-top:2px}
+.alert-box{
+  background:var(--warn-soft);border:1px solid #fcd34d;border-left:4px solid var(--warn);
+  border-radius:10px;padding:11px 13px;font-size:14px;color:#92400e;line-height:1.7;margin:0 0 12px;
+}
+.alert-box.big{
+  background:#fff1f2;border-color:#fda4af;border-left-color:var(--bad);color:#9f1239;
+  font-weight:700;font-size:15px;margin:0 0 12px;
+}
+.alert-box.big span{display:block;font-weight:400;font-size:13px;color:#be123c;margin-top:3px}
 .warn-box{
   background:var(--bad-soft);border:1px solid #fecaca;color:#991b1b;
   border-radius:10px;padding:11px 13px;font-size:13.5px;line-height:1.7;margin:0 0 4px;
@@ -279,6 +293,6 @@ textarea{min-height:84px;resize:vertical}
 <div id="toastHost"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="app.js?v=1.5"></script>
+<script src="app.js?v=1.6"></script>
 </body>
 </html>
