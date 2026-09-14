@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="T0.2">
+<meta name="app-version" content="T0.4">
 <title>西門龍門儀錶板</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -253,6 +253,8 @@ textarea{min-height:84px;resize:vertical}
 /* 銷售單卡片列表 */
 .rec-card{background:#fff;border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);
   margin-bottom:12px;padding:14px 16px}
+.rec-card.is-void{opacity:.62;background:#fafafa}
+.rec-card.is-void .amt{text-decoration:line-through}
 .rec-top{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:8px}
 .rec-top .who2{font-weight:700;font-size:16px;flex:1 1 auto;min-width:0}
 .rec-top .amt{font-weight:700;font-size:16px;font-variant-numeric:tabular-nums}
@@ -367,7 +369,7 @@ textarea{min-height:84px;resize:vertical}
 <div id="toastHost"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="app.js?v=T0.2"></script>
-<script src="sales.js?v=T0.2"></script>
+<script src="app.js?v=T0.4"></script>
+<script src="sales.js?v=T0.4"></script>
 </body>
 </html>
