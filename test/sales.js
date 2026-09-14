@@ -1,0 +1,868 @@
+/* =========================================================================
+   西門龍門儀錶板 ── 銷售紀錄模組 sales.js（測試版）
+   相依：app.js（S / CONFIG / api / applyPlan / confirmModal / toast …）
+   ========================================================================= */
+
+/* ----------------------------- 設定 ------------------------------------ */
+const SALES = {
+  // 銷售單分頁（沒有就自動建立）
+  SHEET: {
+    shop:   'ShopSales店頭銷售',
+    online: 'Online網路',
+    mini:   'miniSales小賣銷售',
+    dist:   'Distributors經銷銷售'
+  },
+  LABEL: { shop: '來店', online: '網路', mini: '小賣', dist: '經銷' },
+
+  // 名單分頁：用「標題列有什麼欄位」去認，不靠分頁名稱，改名也不會壞
+  LIST_SIG: { staff: '負責業務', mini: '小賣名稱', dist: '經銷商名稱' },
+
+  SHIP:   ['未寄出', '已寄出'],
+  PICK:   ['未取件', '已取件', '已送達', '未送達', '即將退貨', '退貨路上', '包裹異常'],
+  PAY:    ['未結帳', '已結帳'],
+  DONE_PICK: ['已取件', '已送達'],          // 這兩種都算貨態完成
+  RETURN_PICK: ['即將退貨', '退貨路上', '包裹異常'],   // 這幾種可以按「退貨入庫」
+  RETURNED: '已退貨入庫',
+  SEND_WAY:      ['7-11', '全家'],
+  DIST_SEND_WAY: ['7-11店到店', '全家店到店'],
+  PICKUP: ['三重店取', '西門店取', '寄送'],
+  PICK_STORE: { '三重店取': '三重龍門', '西門店取': '西門' },
+  NA: 'N/A'
+};
+
+const SH_HEAD = {
+  shop: ['id', '訂單日期', '建立時間', '建立者', '門市', '負責業務', '品項明細', '金額', '成本',
+         '備註', '品項JSON', '庫存異動JSON', '庫存狀態', '關聯單號', '狀態'],
+  online: ['id', '訂單日期', '建立時間', '建立者', '客戶名稱', '電話', '訂單內容', '價格', '運費', '成本',
+           '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '備註',
+           '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態'],
+  mini: ['id', '訂單日期', '建立時間', '建立者', '銷售小賣', '客戶名稱', '小賣自取', '電話', '取貨方式',
+         '訂單內容', '價格', '運費', '成本', '寄送方式', '店名',
+         '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '獎金', '備註',
+         '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態'],
+  dist: ['id', '訂單日期', '建立時間', '建立者', '經銷名稱', '經銷聯絡電話', '訂單內容', '價格', '運費', '成本',
+         '寄送方式', '收貨門市', '收貨人', '收貨人電話',
+         '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '備註',
+         '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態']
+};
+const SH_COL = {};                       // kind → {欄位: 索引}
+Object.keys(SH_HEAD).forEach(k => { SH_COL[k] = {}; SH_HEAD[k].forEach((h, i) => SH_COL[k][h] = i); });
+const lastCol = k => colLetter(SH_HEAD[k].length - 1);
+
+/* ----------------------------- 狀態 ------------------------------------ */
+const SALE = {
+  mode: 'board',            // board | sales
+  view: 'home',
+  titles: {},               // kind → 分頁名稱
+  rows: { shop: [], online: [], mini: [], dist: [] },
+  lists: { staff: [], mini: [], dist: [] },
+  form: null,
+  loaded: false
+};
+
+/* ----------------------------- 啟動 ------------------------------------ */
+window.initSales = async function (sheets) {
+  const titles = (sheets || []).map(s => s.properties.title);
+
+  // 1) 銷售分頁：沒有就建，並寫好標題列
+  const need = [];
+  for (const k of Object.keys(SALES.SHEET)) {
+    const t = SALES.SHEET[k];
+    SALE.titles[k] = t;
+    if (!titles.includes(t)) need.push(t);
+  }
+  if (need.length) {
+    await api(`${CONFIG.SPREADSHEET_ID}:batchUpdate`, {
+      method: 'POST',
+      body: JSON.stringify({ requests: need.map(t => ({ addSheet: { properties: { title: t } } })) })
+    });
+    toast('已建立銷售分頁：' + need.join('、'), 'ok');
+  }
+  // 標題列比對（缺欄位自動補）
+  for (const k of Object.keys(SH_HEAD)) {
+    const t = SALE.titles[k];
+    const hdr = (await readRange(t, `A1:${lastCol(k)}1`))[0] || [];
+    if (SH_HEAD[k].some((h, i) => String(hdr[i] || '') !== h)) {
+      await writeRanges([{ range: `'${t}'!A1:${lastCol(k)}1`, values: [SH_HEAD[k]] }]);
+    }
+  }
+
+  // 2) 名單分頁：掃每個分頁的標題列，用欄位特徵認人
+  const ranges = titles.map(t => rangeOf(t, 'A1:E1')).map(r => 'ranges=' + r).join('&');
+  let heads = {};
+  try {
+    const j = await api(`${CONFIG.SPREADSHEET_ID}/values:batchGet?${ranges}`);
+    (j.valueRanges || []).forEach((vr, i) => { heads[titles[i]] = (vr.values || [])[0] || []; });
+  } catch (e) { console.warn('讀取分頁標題失敗', e); }
+
+  for (const key of Object.keys(SALES.LIST_SIG)) {
+    const sig = SALES.LIST_SIG[key];
+    const hit = titles.find(t => (heads[t] || []).some(c => String(c).trim() === sig));
+    if (!hit) continue;
+    SALE.titles['list_' + key] = hit;
+    const rows = await readRange(hit, 'A2:E400');
+    SALE.lists[key] = rows.filter(r => String(r[0] || '').trim()).map(r => ({
+      name: String(r[0]).trim(), contact: String(r[1] || '').trim(),
+      c: String(r[2] || '').trim(), d: String(r[3] || '').trim(), e: String(r[4] || '').trim()
+    }));
+  }
+
+  await loadSales();
+  wireSalesUI();
+  SALE.loaded = true;
+};
+
+async function loadSales() {
+  for (const k of Object.keys(SH_HEAD)) {
+    const t = SALE.titles[k];
+    const rows = await readRange(t, `A2:${lastCol(k)}3000`);
+    SALE.rows[k] = rows.map((r, i) => {
+      const o = { _row: i + 2, _kind: k };
+      SH_HEAD[k].forEach((h, ci) => o[h] = r[ci] ?? '');
+      return o;
+    }).filter(o => o.id);
+  }
+}
+
+/* ----------------------------- 共用小工具 ------------------------------ */
+const sEsc = s => esc(s);
+const numIn = (cls, val, ph, extra) =>
+  `<input type="number" inputmode="decimal" class="${cls}" min="0" step="1" value="${val ?? ''}" placeholder="${ph || ''}" ${extra || ''}>`;
+const telIn = (cls, val) => `<input type="tel" inputmode="tel" class="${cls}" value="${sEsc(val || '')}">`;
+const opts = (list, cur) => list.map(o => `<option value="${sEsc(o)}"${o === cur ? ' selected' : ''}>${sEsc(o)}</option>`).join('');
+
+/** 依登入 email 猜負責業務 */
+function defaultStaff() {
+  const email = String((S.user && S.user.email) || '').toLowerCase();
+  const hit = SALE.lists.staff.find(x => x.contact && x.contact.toLowerCase() === email);
+  return hit ? hit.name : '';
+}
+function staffNames() { return SALE.lists.staff.map(x => x.name); }
+
+/** 一張單的成本合計 */
+function costOf(items) {
+  return items.reduce((sum, it) => {
+    const p = S.products.byRow.get(it.row);
+    const c = p ? (p.nums['成本'] || 0) : 0;
+    return sum + c * it.qty;
+  }, 0);
+}
+const itemsText = items => items.map(i => `${i.name} ${i.spec} ×${i.qty}`).join('\n');
+const itemsTotal = items => items.reduce((s, i) => s + (i.qty * (i.price || 0)), 0);
+
+/** 把品項補上 name/spec（從庫存表查） */
+function fillItems(list, src) {
+  return list.map(i => {
+    const p = S.products.byRow.get(i.row);
+    return { row: i.row, name: p ? p.name : '', spec: p ? p.spec : '', qty: i.qty, price: i.price || 0, src };
+  });
+}
+
+/* ----------------------------- 模式切換 -------------------------------- */
+function wireSalesUI() {
+  document.querySelectorAll('.mode-tab').forEach(t => t.onclick = () => setMode(t.dataset.mode));
+}
+function setMode(m) {
+  SALE.mode = m;
+  document.querySelectorAll('.mode-tab').forEach(x => x.classList.toggle('on', x.dataset.mode === m));
+  $('boardView').classList.toggle('hidden', m !== 'board');
+  $('salesView').classList.toggle('hidden', m !== 'sales');
+  if (m === 'sales') renderSalesView();
+}
+
+/* ----------------------------- 畫面分派 -------------------------------- */
+function renderSalesView() {
+  const v = SALE.view;
+  if (v === 'new') return renderNewPicker();
+  if (v === 'query') return renderQuery();
+  if (v.startsWith('recv-')) return renderRecv(v.slice(5));
+  SALE.view = 'home';
+  return renderSales();
+}
+
+/* ----------------------------- 銷售首頁 -------------------------------- */
+function unsettled(kind) {
+  return SALE.rows[kind].filter(r => String(r['封存']) !== '是');
+}
+
+function renderSales() {
+  if (SALE.view !== 'home') return;
+  const n = k => unsettled(k).length;
+  $('salesView').innerHTML = `
+    <div class="pos-row">
+      <button class="pos-btn primary" data-sv="new"><span class="ico">＋</span>新增銷售
+        <span class="sub">來店 · 網路 · 小賣 · 經銷</span></button>
+      <button class="pos-btn" data-sv="query"><span class="ico">🔍</span>查詢
+        <span class="sub">日期 · 單別 · 客戶 · 業務</span></button>
+    </div>
+    <div class="pos-row">
+      <button class="pos-btn" data-sv="recv-dist"><span class="ico">🏪</span>經銷應收待結
+        ${n('dist') ? `<span class="badge">${n('dist')}</span>` : '<span class="sub">目前沒有</span>'}</button>
+      <button class="pos-btn" data-sv="recv-online"><span class="ico">📦</span>網路應收待結
+        ${n('online') ? `<span class="badge">${n('online')}</span>` : '<span class="sub">目前沒有</span>'}</button>
+      <button class="pos-btn" data-sv="recv-mini"><span class="ico">🛍️</span>小賣應收待結
+        ${n('mini') ? `<span class="badge">${n('mini')}</span>` : '<span class="sub">目前沒有</span>'}</button>
+    </div>
+    <div class="sec-title">今日銷售</div>
+    ${todayBrief()}`;
+}
+
+function todayBrief() {
+  const t = todayStr();
+  const all = [];
+  for (const k of Object.keys(SH_HEAD)) {
+    SALE.rows[k].filter(r => String(r['訂單日期']) === t).forEach(r => all.push(r));
+  }
+  if (!all.length) return `<div class="empty">今天還沒有銷售紀錄</div>`;
+  const sum = all.reduce((s, r) => s + (Number(r['金額'] || r['價格']) || 0), 0);
+  const by = {};
+  all.forEach(r => { by[r._kind] = (by[r._kind] || 0) + 1; });
+  return `<div class="rec-card">
+    <div class="rec-top"><span class="who2">今天共 ${all.length} 筆</span><span class="amt">${money(sum)}</span></div>
+    <div class="rec-meta">${Object.keys(by).map(k => `${SALES.LABEL[k]} ${by[k]} 筆`).join('　·　')}</div>
+  </div>`;
+}
+
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-sv]');
+  if (!b) return;
+  const v = b.dataset.sv;
+  if (v === 'new') return renderNewPicker();
+  if (v === 'home') { SALE.view = 'home'; return renderSales(); }
+  if (v === 'query') return renderQuery();
+  if (v.startsWith('recv-')) return renderRecv(v.slice(5));
+});
+
+function backBar(title) {
+  return `<div class="sales-head">
+    <button class="btn btn-sm" data-sv="home">← 返回</button>
+    <h2>${sEsc(title)}</h2>
+  </div>`;
+}
+
+/* ----------------------------- 新增銷售：選單別 ------------------------ */
+function renderNewPicker() {
+  SALE.view = 'new';
+  $('salesView').innerHTML = backBar('新增銷售單') + `
+    <div class="pos-row">
+      ${Object.keys(SALES.SHEET).map(k => `
+        <button class="pos-btn" data-newsale="${k}">
+          <span class="ico">${{ shop: '🏬', online: '🌐', mini: '🛍️', dist: '🏪' }[k]}</span>${SALES.LABEL[k]}
+          <span class="sub">${{ shop: '客人在店裡買', online: '網路訂單，總倉出', mini: '小賣訂貨', dist: '經銷商訂貨' }[k]}</span>
+        </button>`).join('')}
+    </div>`;
+}
+
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-newsale]');
+  if (b) openSaleForm(b.dataset.newsale);
+});
+
+/* ----------------------------- 銷售單表單 ------------------------------ */
+function newSaleItem() { return { cat: S.lastCat || null, name: '', row: null, qty: 1, price: 0 }; }
+function newDistGroup() { return { cat: S.lastCat || null, name: '', qty: {}, price: {} }; }
+
+function openSaleForm(kind) {
+  SALE.form = {
+    kind, date: todayStr(), staff: defaultStaff(),
+    store: CONFIG.STORES[0].label,
+    items: [newSaleItem()], groups: [newDistGroup()],
+    cName: '', tel: '', note: '', fee: '', payStatus: SALES.PAY[0], payDate: '',
+    miniName: (SALE.lists.mini[0] || {}).name || '', selfPick: false, pickup: SALES.PICKUP[0],
+    sendWay: SALES.SEND_WAY[0], storeName: '',
+    distName: (SALE.lists.dist[0] || {}).name || '', distTel: '',
+    dSendWay: SALES.DIST_SEND_WAY[0], useDefault: true, rShop: '', rName: '', rTel: ''
+  };
+  applyDistDefaults();
+  const host = $('modalHost');
+  host.innerHTML = `<div class="modal"><div class="sheet sale-form">
+      <div class="sheet-head"><h2>新增${SALES.LABEL[kind]}銷售單</h2>
+        <button class="btn btn-ghost" id="closeSale">✕</button></div>
+      <div class="sheet-body" id="saleBody"></div>
+      <div class="sheet-foot">
+        <button class="btn" id="cancelSale">取消</button>
+        <button class="btn btn-primary" id="submitSale">送出銷售單</button>
+      </div></div></div>`;
+  $('closeSale').onclick = $('cancelSale').onclick = () => { host.innerHTML = ''; SALE.form = null; };
+  $('submitSale').onclick = submitSale;
+  renderSaleBody();
+}
+
+function applyDistDefaults() {
+  const f = SALE.form;
+  if (f.kind !== 'dist' || !f.useDefault) return;
+  const d = SALE.lists.dist.find(x => x.name === f.distName);
+  if (d) { f.rShop = d.c; f.rName = d.d; f.rTel = d.e; }
+}
+
+/** 這張單的庫存來源欄位 */
+function saleSrc() {
+  const f = SALE.form;
+  if (f.kind === 'shop') return storeCol(f.store);
+  if (f.kind === 'mini') return f.pickup === '寄送' ? CONFIG.H.warehouse : storeCol(SALES.PICK_STORE[f.pickup]);
+  return CONFIG.H.warehouse;
+}
+function srcNote() {
+  const c = saleSrc();
+  return `<div class="hint-row">這張單的庫存會扣在 <b>${sEsc(srcLabel(c))}</b></div>`;
+}
+
+function renderSaleBody() {
+  const f = SALE.form, b = $('saleBody');
+  const staffField = `<div class="field"><label>負責業務 <span class="req">*</span></label>
+      <select id="fStaff">${opts([''].concat(staffNames()), f.staff)}</select>
+      ${f.staff ? '<div class="hint-row">已依你的登入帳號自動帶入，可以改</div>' : ''}</div>`;
+  const dateField = `<div class="field"><label>訂單日期 <span class="req">*</span></label>
+      <input type="date" id="fDate2" value="${f.date}"></div>`;
+  const noteField = `<div class="field"><label>備註</label>
+      <textarea id="fNote2" placeholder="特殊狀況、客人交代的事">${sEsc(f.note)}</textarea></div>`;
+  const payFields = `
+    <div class="field"><label>結帳狀態 <span class="req">*</span></label>
+      <div class="chips big-chips" id="payChips">
+        ${SALES.PAY.map(p => `<button class="chip${p === f.payStatus ? ' on' : ''}" data-pay="${p}">${p}</button>`).join('')}
+      </div></div>
+    <div class="field"><label>結帳日（未結帳可空白）</label>
+      <input type="date" id="fPayDate" value="${f.payDate}"></div>`;
+  const feeField = `<div class="field"><label>運費</label>${numIn('fFee', f.fee, '0')}</div>`;
+
+  let html = dateField;
+
+  if (f.kind === 'shop') {
+    html += `<div class="field"><label>門市 <span class="req">*</span></label>
+        <div class="chips big-chips" id="storeChips2">
+          ${CONFIG.STORES.map(s => `<button class="chip${s.label === f.store ? ' on' : ''}" data-store="${s.label}">${s.label}</button>`).join('')}
+        </div>${srcNote()}</div>` + staffField + itemsBlock() + noteField;
+  }
+
+  if (f.kind === 'online') {
+    html += `<div class="field"><label>客戶名稱 <span class="req">*</span></label>
+        <input type="text" id="fCName" value="${sEsc(f.cName)}"></div>
+      <div class="field"><label>電話 <span class="req">*</span></label>${telIn('fTel', f.tel)}</div>`
+      + itemsBlock() + feeField + payFields + staffField + noteField
+      + `<div class="hint-row" style="margin-top:-6px">寄件狀態、取貨狀態、寄件代碼開單時不用填，之後在「網路應收待結」補。</div>`;
+  }
+
+  if (f.kind === 'mini') {
+    html += `<div class="field"><label>銷售小賣 <span class="req">*</span></label>
+        <select id="fMini">${opts(SALE.lists.mini.map(x => x.name), f.miniName)}</select></div>
+      <div class="field"><label>客戶名稱 ${f.selfPick ? '' : '<span class="req">*</span>'}</label>
+        <input type="text" id="fCName" value="${sEsc(f.cName)}" ${f.selfPick ? 'placeholder="小賣自取，可不填"' : ''}>
+        <div style="margin-top:8px">
+          <label class="check-inline${f.selfPick ? ' on' : ''}"><input type="checkbox" id="fSelf" ${f.selfPick ? 'checked' : ''}>小賣自取</label>
+        </div></div>
+      ${f.selfPick ? '' : `<div class="field"><label>電話</label>${telIn('fTel', f.tel)}</div>`}
+      <div class="field"><label>取貨方式 <span class="req">*</span></label>
+        <div class="chips big-chips" id="pickChips">
+          ${SALES.PICKUP.map(p => `<button class="chip${p === f.pickup ? ' on' : ''}" data-pick="${p}">${p}</button>`).join('')}
+        </div>${srcNote()}</div>`
+      + itemsBlock()
+      + (f.pickup === '寄送' ? `
+        <div class="field"><label>寄送方式</label>
+          <div class="chips big-chips" id="wayChips">
+            ${SALES.SEND_WAY.map(w => `<button class="chip${w === f.sendWay ? ' on' : ''}" data-way="${w}">${w}</button>`).join('')}
+          </div></div>
+        <div class="field"><label>店名</label><input type="text" id="fStoreName" value="${sEsc(f.storeName)}"></div>
+        ${feeField}` : '')
+      + payFields + staffField + noteField;
+  }
+
+  if (f.kind === 'dist') {
+    html += `<div class="field"><label>經銷名稱 <span class="req">*</span></label>
+        <select id="fDist">${opts(SALE.lists.dist.map(x => x.name), f.distName)}</select></div>
+      <div class="field"><label>經銷聯絡電話</label>${telIn('fDistTel', f.distTel)}</div>`
+      + distBlock()
+      + `<div class="field"><label>寄送方式</label>
+          <div class="chips big-chips" id="dwayChips">
+            ${SALES.DIST_SEND_WAY.map(w => `<button class="chip${w === f.dSendWay ? ' on' : ''}" data-dway="${w}">${w}</button>`).join('')}
+          </div></div>
+        <div class="field">
+          <label class="check-inline${f.useDefault ? ' on' : ''}"><input type="checkbox" id="fUseDef" ${f.useDefault ? 'checked' : ''}>使用預設收件資料</label>
+        </div>
+        <div class="field"><label>收貨門市</label><input type="text" id="fRShop" value="${sEsc(f.rShop)}"></div>
+        <div class="field"><label>收貨人</label><input type="text" id="fRName" value="${sEsc(f.rName)}"></div>
+        <div class="field"><label>收貨人電話</label>${telIn('fRTel', f.rTel)}</div>`
+      + feeField + payFields + staffField + noteField;
+  }
+
+  b.innerHTML = html;
+  wireSaleBody();
+}
+
+function itemsBlock() {
+  return `<div class="field"><label>訂單內容 <span class="req">*</span></label>
+    <div id="saleItems"></div>
+    <button class="btn add-item" id="addSaleItem">＋ 增加品項</button>
+    <div class="total-bar"><span>金額合計</span><span id="saleTotal">NT$0</span></div></div>`;
+}
+function distBlock() {
+  return `<div class="field"><label>訂單內容 <span class="req">*</span></label>
+    <div id="distGroups"></div>
+    <button class="btn add-item" id="addDistGroup">＋ 增加另一個產品</button>
+    <div class="total-bar"><span>金額合計</span><span id="saleTotal">NT$0</span></div></div>`;
+}
+
+function wireSaleBody() {
+  const f = SALE.form;
+  const on = (id, ev, fn) => { const el = $(id); if (el) el[ev] = fn; };
+  on('fDate2', 'oninput', e => f.date = e.target.value);
+  on('fStaff', 'onchange', e => f.staff = e.target.value);
+  on('fNote2', 'oninput', e => f.note = e.target.value);
+  on('fCName', 'oninput', e => f.cName = e.target.value);
+  on('fPayDate', 'oninput', e => f.payDate = e.target.value);
+  on('fStoreName', 'oninput', e => f.storeName = e.target.value);
+  on('fRShop', 'oninput', e => f.rShop = e.target.value);
+  on('fRName', 'oninput', e => f.rName = e.target.value);
+  document.querySelectorAll('.fTel').forEach(el => el.oninput = e => f.tel = e.target.value);
+  document.querySelectorAll('.fDistTel').forEach(el => el.oninput = e => f.distTel = e.target.value);
+  document.querySelectorAll('.fRTel').forEach(el => el.oninput = e => f.rTel = e.target.value);
+  document.querySelectorAll('.fFee').forEach(el => el.oninput = e => f.fee = e.target.value);
+
+  document.querySelectorAll('#storeChips2 .chip').forEach(c => c.onclick = () => { f.store = c.dataset.store; renderSaleBody(); });
+  document.querySelectorAll('#payChips .chip').forEach(c => c.onclick = () => { f.payStatus = c.dataset.pay; renderSaleBody(); });
+  document.querySelectorAll('#pickChips .chip').forEach(c => c.onclick = () => { f.pickup = c.dataset.pick; renderSaleBody(); });
+  document.querySelectorAll('#wayChips .chip').forEach(c => c.onclick = () => { f.sendWay = c.dataset.way; renderSaleBody(); });
+  document.querySelectorAll('#dwayChips .chip').forEach(c => c.onclick = () => { f.dSendWay = c.dataset.dway; renderSaleBody(); });
+
+  on('fSelf', 'onchange', e => { f.selfPick = e.target.checked; renderSaleBody(); });
+  on('fMini', 'onchange', e => { f.miniName = e.target.value; });
+  on('fDist', 'onchange', e => { f.distName = e.target.value; applyDistDefaults(); renderSaleBody(); });
+  on('fUseDef', 'onchange', e => { f.useDefault = e.target.checked; applyDistDefaults(); renderSaleBody(); });
+
+  on('addSaleItem', 'onclick', () => { f.items.push(newSaleItem()); renderSaleItems(); });
+  on('addDistGroup', 'onclick', () => { f.groups.push(newDistGroup()); renderDistGroups(); });
+  if ($('saleItems')) renderSaleItems();
+  if ($('distGroups')) renderDistGroups();
+}
+
+/* ---- 品項（來店 / 網路 / 小賣）：分類 → 品名 → 規格 → 數量 → 單價 ---- */
+function renderSaleItems() {
+  const host = $('saleItems'), P = S.products, f = SALE.form;
+  host.innerHTML = f.items.map((it, i) => {
+    const p = it.row ? P.byRow.get(it.row) : null;
+    const cat = it.cat || (p ? p.cat : null) || S.lastCat || (P.cats[0] || ALL_CAT);
+    const names = (!P.hasCats || cat === ALL_CAT) ? P.names : (P.byCat.get(cat) || []);
+    const variants = it.name ? (P.byName.get(it.name) || []) : [];
+    const have = p ? (p.nums[saleSrc()] || 0) : 0;
+    const tabs = P.hasCats ? `<div class="cat-tabs">
+        ${P.cats.map(c => `<button class="cat-tab${c === cat ? ' on' : ''}" data-cat="${sEsc(c)}">${sEsc(c)}</button>`).join('')}
+        <button class="cat-tab${cat === ALL_CAT ? ' on' : ''}" data-cat="${ALL_CAT}">全部</button></div>` : '';
+    return `<div class="item-row" data-i="${i}">
+      ${tabs}
+      <div class="two">
+        <div class="f"><label>產品名稱</label>
+          <select class="itemName"><option value="">— 請選擇（${names.length} 項）—</option>
+            ${names.map(n => `<option value="${sEsc(n)}"${n === it.name ? ' selected' : ''}>${sEsc(n)}</option>`).join('')}
+          </select></div>
+        <div class="f"><label>產品規格</label>
+          <select class="itemSpec"${it.name ? '' : ' disabled'}>
+            <option value="">${it.name ? '— 請選擇規格 —' : '請先選產品名稱'}</option>
+            ${variants.map(v => `<option value="${v.sheetRow}"${v.sheetRow === it.row ? ' selected' : ''}>${sEsc(v.spec || '（無規格）')}（${srcLabel(saleSrc())} ${v.nums[saleSrc()] || 0}）</option>`).join('')}
+          </select></div>
+      </div>
+      ${p ? `<div class="stockline${it.qty > have ? ' short' : ''}">${sEsc(srcLabel(saleSrc()))}現有 <b>${have}</b>${it.qty > have ? `　⚠ 不足 ${it.qty - have}` : ''}　·　售價 ${money(p.price)}</div>` : ''}
+      <div class="r2">
+        <div class="f"><label>數量</label>${numIn('itemQty', it.qty, '1', 'min="1"')}</div>
+        <div class="f"><label>單價</label>${numIn('itemPrice', it.price, '0')}</div>
+        <div class="f" style="max-width:110px"><label>小計</label>
+          <input type="text" value="${money(it.qty * it.price)}" readonly style="background:#f1f5f9"></div>
+        ${f.items.length > 1 ? `<button class="del">✕</button>` : ''}
+      </div></div>`;
+  }).join('');
+
+  host.querySelectorAll('.item-row').forEach(row => {
+    const i = +row.dataset.i, it = f.items[i];
+    row.querySelectorAll('.cat-tab').forEach(t => t.onclick = () => {
+      it.cat = t.dataset.cat; S.lastCat = it.cat;
+      const ns = it.cat === ALL_CAT ? S.products.names : (S.products.byCat.get(it.cat) || []);
+      if (it.name && !ns.includes(it.name)) { it.name = ''; it.row = null; }
+      renderSaleItems();
+    });
+    row.querySelector('.itemName').onchange = e => {
+      it.name = e.target.value; it.row = null;
+      const vs = S.products.byName.get(it.name) || [];
+      if (vs.length === 1) { it.row = vs[0].sheetRow; it.price = vs[0].price; }
+      renderSaleItems(); saleTotal();
+    };
+    row.querySelector('.itemSpec').onchange = e => {
+      it.row = +e.target.value || null;
+      const p = it.row ? S.products.byRow.get(it.row) : null;
+      if (p) { it.price = p.price; it.cat = p.cat; }
+      renderSaleItems(); saleTotal();
+    };
+    row.querySelector('.itemQty').oninput = e => { it.qty = Math.max(1, +e.target.value || 1); saleTotal(); };
+    row.querySelector('.itemPrice').oninput = e => { it.price = Math.max(0, +e.target.value || 0); saleTotal(); };
+    const d = row.querySelector('.del');
+    if (d) d.onclick = () => { f.items.splice(i, 1); renderSaleItems(); saleTotal(); };
+  });
+  saleTotal();
+}
+
+/* ---- 經銷：同系列一次列出，每個規格都有「數量 + 單價」 ---- */
+function renderDistGroups() {
+  const host = $('distGroups'), P = S.products, f = SALE.form;
+  host.innerHTML = f.groups.map((g, i) => {
+    const cat = g.cat || S.lastCat || (P.cats[0] || ALL_CAT);
+    const names = (!P.hasCats || cat === ALL_CAT) ? P.names : (P.byCat.get(cat) || []);
+    const variants = g.name ? (P.byName.get(g.name) || []) : [];
+    const tabs = P.hasCats ? `<div class="cat-tabs">
+        ${P.cats.map(c => `<button class="cat-tab${c === cat ? ' on' : ''}" data-cat="${sEsc(c)}">${sEsc(c)}</button>`).join('')}
+        <button class="cat-tab${cat === ALL_CAT ? ' on' : ''}" data-cat="${ALL_CAT}">全部</button></div>` : '';
+    const specs = variants.length ? `<div class="spec-list">
+        <div class="spec-head"><span>規格</span><span class="sq">總倉</span><span class="qt">數量</span><span class="qt">單價</span></div>
+        ${variants.map(v => {
+          const q = g.qty[v.sheetRow] || '', pr = g.price[v.sheetRow] ?? '';
+          return `<div class="spec-row${q ? ' has' : ''}" data-row="${v.sheetRow}">
+            <span class="nm">${sEsc(v.spec || '（無規格）')}</span>
+            <span class="sq">${v.nums[CONFIG.H.warehouse] || 0}</span>
+            ${numIn('gq', q, '0', `data-row="${v.sheetRow}"`)}
+            ${numIn('gp', pr, String(v.price || 0), `data-row="${v.sheetRow}"`)}
+          </div>`;
+        }).join('')}</div>`
+      : (g.name ? '' : `<div class="spec-empty">選好產品名稱後，這裡會列出所有規格，填數量和單價</div>`);
+    return `<div class="group-box" data-i="${i}">
+      <div class="group-top"><span class="group-n">產品 ${i + 1}</span>
+        ${f.groups.length > 1 ? `<button class="del">✕</button>` : ''}</div>
+      ${tabs}
+      <div class="f"><label>產品名稱</label>
+        <select class="gName"><option value="">— 請選擇（${names.length} 項）—</option>
+          ${names.map(n => `<option value="${sEsc(n)}"${n === g.name ? ' selected' : ''}>${sEsc(n)}</option>`).join('')}
+        </select></div>
+      ${specs}</div>`;
+  }).join('');
+
+  host.querySelectorAll('.group-box').forEach(box => {
+    const i = +box.dataset.i, g = f.groups[i];
+    box.querySelectorAll('.cat-tab').forEach(t => t.onclick = () => {
+      g.cat = t.dataset.cat; S.lastCat = g.cat;
+      const ns = g.cat === ALL_CAT ? S.products.names : (S.products.byCat.get(g.cat) || []);
+      if (g.name && !ns.includes(g.name)) { g.name = ''; g.qty = {}; g.price = {}; }
+      renderDistGroups();
+    });
+    box.querySelector('.gName').onchange = e => {
+      g.name = e.target.value; g.qty = {}; g.price = {};
+      const p = (S.products.byName.get(g.name) || [])[0];
+      if (p) g.cat = p.cat;
+      renderDistGroups(); saleTotal();
+    };
+    box.querySelectorAll('.gq').forEach(inp => inp.oninput = ev => {
+      const n = Math.max(0, +ev.target.value || 0), r = ev.target.dataset.row;
+      if (n) { g.qty[r] = n; if (g.price[r] === undefined) { const p = S.products.byRow.get(+r); g.price[r] = p ? p.price : 0; } }
+      else delete g.qty[r];
+      ev.target.closest('.spec-row').classList.toggle('has', !!n);
+      const pe = ev.target.closest('.spec-row').querySelector('.gp');
+      if (pe && n && !pe.value) pe.value = g.price[r];
+      saleTotal();
+    });
+    box.querySelectorAll('.gp').forEach(inp => inp.oninput = ev => {
+      g.price[ev.target.dataset.row] = Math.max(0, +ev.target.value || 0); saleTotal();
+    });
+    const d = box.querySelector('.del');
+    if (d) d.onclick = () => { f.groups.splice(i, 1); renderDistGroups(); saleTotal(); };
+  });
+  saleTotal();
+}
+
+function saleItemList() {
+  const f = SALE.form, src = saleSrc();
+  if (f.kind === 'dist') {
+    const out = [];
+    f.groups.forEach(g => Object.keys(g.qty).forEach(r => {
+      const n = Number(g.qty[r]) || 0;
+      if (n > 0) out.push({ row: +r, qty: n, price: Number(g.price[r]) || 0 });
+    }));
+    return fillItems(out, src);
+  }
+  return fillItems(f.items.filter(i => i.row).map(i => ({ row: i.row, qty: i.qty, price: i.price })), src);
+}
+function saleTotal() {
+  const el = $('saleTotal');
+  if (el) el.textContent = money(itemsTotal(saleItemList()));
+}
+
+/* ----------------------------- 送出銷售單 ------------------------------ */
+async function submitSale() {
+  const f = SALE.form, k = f.kind, btn = $('submitSale');
+  const items = saleItemList();
+  if (!f.date) return alert('請選擇訂單日期');
+  if (!items.length) return alert('請選擇訂單內容');
+  if (!f.staff) return alert('請選擇負責業務');
+  if (k === 'online' && !f.cName.trim()) return alert('請填寫客戶名稱');
+  if (k === 'online' && !f.tel.trim()) return alert('請填寫電話');
+  if (k === 'mini' && !f.selfPick && !f.cName.trim()) return alert('請填寫客戶名稱，或勾選「小賣自取」');
+
+  const src = saleSrc();
+  const short = items.filter(i => {
+    const p = S.products.byRow.get(i.row);
+    return p && i.qty > (p.nums[src] || 0);
+  });
+  const total = itemsTotal(items), cost = costOf(items);
+
+  const ok = await confirmModal({
+    title: `確認這張${SALES.LABEL[k]}銷售單`,
+    lines: `<p style="font-size:14px;color:var(--ink-2)">送出後會直接從 <b>${sEsc(srcLabel(src))}</b> 扣掉庫存（總數減少）：</p>
+      <pre class="pre">${esc(items.map(i => `・${i.name} ${i.spec} ×${i.qty}　${money(i.price * i.qty)}`).join('\n'))}</pre>
+      <p style="font-size:15px"><b>合計 ${money(total)}</b>${f.fee ? `　運費 ${money(f.fee)}` : ''}</p>
+      ${short.length ? `<div class="warn-box">⚠ 以下品項在${sEsc(srcLabel(src))}庫存不足，送出後會變負數：<br>
+        ${short.map(i => `・${sEsc(i.name)} ${sEsc(i.spec)}`).join('<br>')}</div>` : ''}`,
+    okText: '確定送出'
+  });
+  if (!ok) return;
+
+  S.busy = true; btn.disabled = true; btn.textContent = '送出中…';
+  try {
+    const id = 'X' + Date.now().toString(36).toUpperCase();
+    const v = new Array(SH_HEAD[k].length).fill('');
+    const set = (key, val) => { if (SH_COL[k][key] !== undefined) v[SH_COL[k][key]] = val; };
+    const na = SALES.NA;
+    const isSelf = k === 'mini' && f.selfPick;
+
+    set('id', id); set('訂單日期', f.date); set('建立時間', nowStr()); set('建立者', userName());
+    set('負責業務', f.staff); set('備註', f.note.trim()); set('成本', cost); set('狀態', '有效');
+    set('品項JSON', JSON.stringify(items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, price: i.price }))));
+    set('庫存異動JSON', JSON.stringify(items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, src }))));
+
+    if (k === 'shop') {
+      set('門市', f.store); set('品項明細', itemsText(items)); set('金額', total);
+      set('庫存狀態', '已扣庫存');
+    } else {
+      set('訂單內容', itemsText(items)); set('價格', total); set('運費', Number(f.fee) || 0);
+      set('結帳狀態', f.payStatus); set('結帳日', f.payDate);
+      set('寄件狀態', isSelf ? na : SALES.SHIP[0]);
+      set('取貨狀態', isSelf ? na : SALES.PICK[0]);
+      set('寄件代碼', isSelf ? na : '');
+      set('封存', '');
+    }
+    if (k === 'online') { set('客戶名稱', f.cName.trim()); set('電話', f.tel.trim()); }
+    if (k === 'mini') {
+      set('銷售小賣', f.miniName); set('客戶名稱', f.cName.trim());
+      set('小賣自取', f.selfPick ? '是' : '否'); set('電話', isSelf ? na : f.tel.trim());
+      set('取貨方式', f.pickup);
+      const posting = f.pickup === '寄送';
+      set('寄送方式', isSelf ? na : (posting ? f.sendWay : na));
+      set('店名', isSelf ? na : (posting ? f.storeName.trim() : na));
+      if (isSelf) { set('結帳狀態', f.payStatus); }
+    }
+    if (k === 'dist') {
+      set('經銷名稱', f.distName); set('經銷聯絡電話', f.distTel.trim());
+      set('寄送方式', f.dSendWay); set('收貨門市', f.rShop.trim());
+      set('收貨人', f.rName.trim()); set('收貨人電話', f.rTel.trim());
+    }
+
+    await appendRow(SALE.titles[k], v);
+    await applyPlan(items, 'sell');
+    $('modalHost').innerHTML = ''; SALE.form = null;
+    await loadSales(); await loadProducts();
+    SALE.view = 'home'; renderSales();
+    toast(`${SALES.LABEL[k]}銷售單已送出，庫存已扣`, 'ok');
+  } catch (err) {
+    alert('送出失敗：\n\n' + err.message);
+  } finally {
+    S.busy = false;
+    if ($('submitSale')) { btn.disabled = false; btn.textContent = '送出銷售單'; }
+  }
+}
+
+/* --------------- 預訂單取貨完成 → 自動開來店銷售單（不扣庫存） --------- */
+window.createShopSaleFromOrder = async function (r) {
+  if (!SALE.titles.shop) return;
+  const items = parseJSON(r['品項JSON'], []);
+  if (!items.length) return;
+  const k = 'shop';
+  const v = new Array(SH_HEAD[k].length).fill('');
+  const set = (key, val) => { v[SH_COL[k][key]] = val; };
+  const srcs = [...new Set(items.map(i => srcLabel(i.src || CONFIG.H.warehouse)))].join('、');
+  set('id', 'X' + Date.now().toString(36).toUpperCase());
+  set('訂單日期', todayStr()); set('建立時間', nowStr()); set('建立者', userName());
+  set('門市', r['門市']); set('負責業務', defaultStaff());
+  set('品項明細', items.map(i => `${i.name} ${i.spec} ×${i.qty}`).join('\n'));
+  set('金額', Number(r['金額']) || 0);
+  set('成本', costOf(items.map(i => ({ row: i.row, qty: i.qty }))));
+  set('備註', `由預訂單「${r['客戶名稱'] || ''}」（${r.id}）自動產生。實際出貨來源：${srcs}。`);
+  set('品項JSON', r['品項JSON']);
+  set('庫存異動JSON', '[]');                    // 空的 → 不會再動庫存
+  set('庫存狀態', '不扣（來自預訂單）');
+  set('關聯單號', r.id); set('狀態', '有效');
+  await appendRow(SALE.titles.shop, v);
+  await loadSales();
+};
+
+/* ----------------------------- 應收待結 -------------------------------- */
+function renderRecv(kind) {
+  SALE.view = 'recv-' + kind;
+  const rows = unsettled(kind).slice().reverse();
+  const name = { dist: '經銷', online: '網路', mini: '小賣' }[kind];
+  $('salesView').innerHTML = backBar(name + '應收待結') +
+    (rows.length ? rows.map(r => recvCard(r, kind)).join('')
+      : `<div class="empty">目前沒有待結的${name}訂單 🎉</div>`);
+  wireRecv(kind);
+}
+
+function recvCard(r, kind) {
+  const who = kind === 'dist' ? r['經銷名稱'] : kind === 'mini' ? `${r['銷售小賣']}　${r['客戶名稱'] || '（小賣自取）'}` : r['客戶名稱'];
+  const paid = r['結帳狀態'] === '已結帳';
+  const returned = String(r['狀態']) === SALES.RETURNED;
+  const canReturn = SALES.RETURN_PICK.includes(String(r['取貨狀態'])) && !returned;
+  const canClose = (paid && SALES.DONE_PICK.includes(String(r['取貨狀態']))) || returned;
+  const na = v => String(v) === SALES.NA;
+  return `<div class="rec-card" data-id="${sEsc(r.id)}" data-row="${r._row}">
+    <div class="rec-top">
+      <span class="who2">${sEsc(who || '（未填）')}</span>
+      <span class="pill-pay ${paid ? 'yes' : 'no'}">${sEsc(r['結帳狀態'] || '未結帳')}</span>
+      <span class="amt">${money(r['價格'])}${Number(r['運費']) ? ` <span style="font-size:12px;font-weight:400;color:var(--ink-3)">+運 ${money(r['運費'])}</span>` : ''}</span>
+    </div>
+    <div class="rec-meta">${sEsc(r['訂單日期'])}　·　${sEsc(r['負責業務'] || '—')}　·　${sEsc(r.id)}
+      ${r['電話'] && !na(r['電話']) ? '　·　' + sEsc(r['電話']) : ''}
+      ${kind === 'dist' ? `　·　${sEsc(r['收貨門市'] || '')} ${sEsc(r['收貨人'] || '')} ${sEsc(r['收貨人電話'] || '')}` : ''}</div>
+    <div class="rec-items">${sEsc(r['訂單內容'] || '')}</div>
+    ${r['備註'] ? `<div class="rec-meta">備註：${sEsc(r['備註'])}</div>` : ''}
+    <div class="st-grid">
+      <div><label>寄件狀態</label><select class="rSel" data-f="寄件狀態">${opts([SALES.NA].concat(SALES.SHIP), r['寄件狀態'])}</select></div>
+      <div><label>取貨狀態</label><select class="rSel" data-f="取貨狀態">${opts([SALES.NA].concat(SALES.PICK), r['取貨狀態'])}</select></div>
+      <div><label>寄件代碼</label><input class="rInp" data-f="寄件代碼" value="${sEsc(r['寄件代碼'] || '')}"></div>
+      ${kind !== 'online' ? `<div><label>寄送方式</label><select class="rSel" data-f="寄送方式">${opts([SALES.NA].concat(kind === 'dist' ? SALES.DIST_SEND_WAY : SALES.SEND_WAY), r['寄送方式'])}</select></div>` : ''}
+      ${kind === 'mini' ? `<div><label>店名</label><input class="rInp" data-f="店名" value="${sEsc(r['店名'] || '')}"></div>` : ''}
+      <div><label>運費</label><input class="rInp" data-f="運費" type="number" inputmode="decimal" value="${sEsc(r['運費'] || '')}"></div>
+      <div><label>結帳狀態</label><select class="rSel" data-f="結帳狀態">${opts(SALES.PAY, r['結帳狀態'])}</select></div>
+      <div><label>結帳日</label><input class="rInp" data-f="結帳日" type="date" value="${sEsc(r['結帳日'] || '')}"></div>
+    </div>
+    ${returned ? `<div class="note">↩ 這筆已經<b>退貨入庫</b>，庫存已經加回去了。</div>` : ''}
+    <div class="rec-foot">
+      <span class="meta">${r['結帳確認者'] ? '結帳確認：' + sEsc(r['結帳確認者']) : ''}</span>
+      <button class="btn btn-sm" data-recsave="1">儲存變更</button>
+      ${canReturn ? `<button class="btn btn-sm btn-danger" data-recreturn="1">↩ 退貨入庫</button>` : ''}
+      ${canClose ? `<button class="btn btn-sm btn-ok" data-recclose="1">✓ 完成並收起</button>` : ''}
+    </div></div>`;
+}
+
+function wireRecv(kind) {
+  document.querySelectorAll('.rec-card').forEach(card => {
+    const id = card.dataset.id;
+    const r = SALE.rows[kind].find(x => x.id === id);
+    const patch = {};
+    card.querySelectorAll('.rSel, .rInp').forEach(el => {
+      const ev = el.tagName === 'SELECT' ? 'onchange' : 'oninput';
+      el[ev] = e => { patch[el.dataset.f] = e.target.value; };
+    });
+    const save = card.querySelector('[data-recsave]');
+    if (save) save.onclick = async () => {
+      if (!Object.keys(patch).length) return toast('沒有變更');
+      if (patch['結帳狀態'] === '已結帳' && r['結帳狀態'] !== '已結帳') patch['結帳確認者'] = userName() + ' ' + nowStr();
+      save.disabled = true; save.textContent = '儲存中…';
+      try { await patchSale(kind, r, patch); await loadSales(); renderRecv(kind); toast('已儲存', 'ok'); }
+      catch (err) { alert('儲存失敗：\n' + err.message); save.disabled = false; save.textContent = '儲存變更'; }
+    };
+    const ret = card.querySelector('[data-recreturn]');
+    if (ret) ret.onclick = async () => {
+      const plan = normPlan(parseJSON(r['庫存異動JSON'], []));
+      if (!plan.length) return alert('這筆沒有庫存紀錄，無法自動入庫。');
+      const ok = await confirmModal({
+        title: '確認貨已經退回來了？',
+        lines: `<p><b>${sEsc(r['客戶名稱'] || r['經銷名稱'] || r['銷售小賣'] || '')}</b>　${money(r['價格'])}</p>
+          <p style="font-size:14px;color:var(--ink-2)">目前取貨狀態：<b>${sEsc(r['取貨狀態'])}</b>。
+          按下確定後，這些貨會<b>加回原本扣的地方</b>：</p>
+          <pre class="pre">${esc(planText(plan, 'unsell'))}</pre>
+          <div class="alert-box">請先確認<b>貨真的回到手上、也清點過了</b>再按。按錯的話庫存會多算。</div>`,
+        okText: '確定，貨已退回入庫',
+        danger: true
+      });
+      if (!ok) return;
+      ret.disabled = true; ret.textContent = '處理中…';
+      try {
+        await applyPlan(plan, 'unsell');
+        await patchSale(kind, r, {
+          狀態: SALES.RETURNED,
+          備註: (r['備註'] ? r['備註'] + ' / ' : '') + `${nowStr()} ${userName()} 退貨入庫`
+        });
+        await loadSales(); await loadProducts(); renderRecv(kind);
+        toast('已退貨入庫，庫存已加回', 'ok');
+      } catch (err) { alert('失敗：\n' + err.message); ret.disabled = false; ret.textContent = '↩ 退貨入庫'; }
+    };
+
+    const close = card.querySelector('[data-recclose]');
+    if (close) close.onclick = async () => {
+      const ok = await confirmModal({
+        title: '確認這筆已經完成？',
+        lines: `<p><b>${sEsc(kind === 'dist' ? r['經銷名稱'] : r['客戶名稱'] || r['銷售小賣'])}</b>　${money(r['價格'])}</p>
+          <p style="font-size:14px;color:var(--ink-2)">結帳狀態：<b>${sEsc(r['結帳狀態'])}</b>　取貨狀態：<b>${sEsc(r['取貨狀態'])}</b></p>
+          <div class="alert-box">收起後這筆<b>不會再顯示在應收待結</b>，但試算表的資料完整保留，「查詢」也查得到。</div>`,
+        okText: '確定，收起'
+      });
+      if (!ok) return;
+      try {
+        await patchSale(kind, r, { 封存: '是', 結帳確認者: r['結帳確認者'] || (userName() + ' ' + nowStr()) });
+        await loadSales(); renderRecv(kind); toast('已收起', 'ok');
+      } catch (err) { alert('失敗：\n' + err.message); }
+    };
+  });
+}
+
+async function patchSale(kind, r, patch) {
+  const t = SALE.titles[kind], data = [];
+  for (const key of Object.keys(patch)) {
+    const ci = SH_COL[kind][key];
+    if (ci === undefined) continue;
+    data.push({ range: `'${t}'!${colLetter(ci)}${r._row}`, values: [[patch[key]]] });
+  }
+  await writeRanges(data);
+  Object.assign(r, patch);      // 本機同步，重新讀取失敗也不會顯示舊狀態
+}
+
+/* ----------------------------- 查詢 ------------------------------------ */
+function renderQuery() {
+  SALE.view = 'query';
+  const q = SALE.query || (SALE.query = { from: '', to: '', kind: '全部', kw: '', staff: '' });
+  $('salesView').innerHTML = backBar('查詢') + `
+    <div class="rec-card">
+      <div class="st-grid">
+        <div><label>從</label><input type="date" id="qFrom" value="${q.from}"></div>
+        <div><label>到</label><input type="date" id="qTo" value="${q.to}"></div>
+        <div><label>單別</label><select id="qKind">${opts(['全部'].concat(Object.values(SALES.LABEL)), q.kind)}</select></div>
+        <div><label>負責業務</label><select id="qStaff">${opts([''].concat(staffNames()), q.staff)}</select></div>
+        <div style="grid-column:1/-1"><label>關鍵字（客戶／經銷／小賣／單號／品項）</label>
+          <input id="qKw" value="${sEsc(q.kw)}" placeholder="留空就不篩"></div>
+      </div>
+      <div class="rec-foot"><span class="meta"></span>
+        <button class="btn btn-primary btn-sm" id="qRun">查詢</button></div>
+    </div>
+    <div id="qResult"></div>`;
+  const upd = () => {
+    q.from = $('qFrom').value; q.to = $('qTo').value; q.kind = $('qKind').value;
+    q.staff = $('qStaff').value; q.kw = $('qKw').value;
+  };
+  ['qFrom', 'qTo', 'qKind', 'qStaff', 'qKw'].forEach(id => { $(id).onchange = upd; $(id).oninput = upd; });
+  $('qRun').onclick = () => { upd(); runQuery(); };
+  runQuery();
+}
+
+function runQuery() {
+  const q = SALE.query, kw = q.kw.trim().toLowerCase();
+  let out = [];
+  for (const k of Object.keys(SH_HEAD)) {
+    if (q.kind !== '全部' && SALES.LABEL[k] !== q.kind) continue;
+    SALE.rows[k].forEach(r => {
+      const d = String(r['訂單日期'] || '');
+      if (q.from && d < q.from) return;
+      if (q.to && d > q.to) return;
+      if (q.staff && r['負責業務'] !== q.staff) return;
+      if (kw) {
+        const hay = [r.id, r['客戶名稱'], r['經銷名稱'], r['銷售小賣'], r['品項明細'], r['訂單內容'], r['備註']]
+          .join(' ').toLowerCase();
+        if (!hay.includes(kw)) return;
+      }
+      out.push(r);
+    });
+  }
+  out.sort((a, b) => String(b['訂單日期']).localeCompare(String(a['訂單日期'])));
+  const sum = out.reduce((s, r) => s + (Number(r['金額'] || r['價格']) || 0), 0);
+  $('qResult').innerHTML = `<div class="sec-title">共 ${out.length} 筆　·　合計 ${money(sum)}</div>` +
+    (out.length ? out.slice(0, 200).map(r => `<div class="rec-card">
+        <div class="rec-top">
+          <span class="tag tag-order">${SALES.LABEL[r._kind]}</span>
+          <span class="who2">${sEsc(r['客戶名稱'] || r['經銷名稱'] || r['銷售小賣'] || r['門市'] || '')}</span>
+          <span class="amt">${money(r['金額'] || r['價格'])}</span></div>
+        <div class="rec-meta">${sEsc(r['訂單日期'])}　·　${sEsc(r['負責業務'] || '—')}　·　${sEsc(r.id)}
+          ${r['結帳狀態'] ? '　·　' + sEsc(r['結帳狀態']) : ''}${String(r['封存']) === '是' ? '　·　已收起' : ''}</div>
+        <div class="rec-items">${sEsc(r['品項明細'] || r['訂單內容'] || '')}</div>
+      </div>`).join('')
+      : `<div class="empty">沒有符合的訂單</div>`);
+}
