@@ -187,7 +187,7 @@ function renderSalesView() {
   if (v === 'new') return renderNewPicker();
   if (v === 'query') return renderQuery();
   if (v === 'shoplog') return renderShopLog();
-  if (v.startsWith('recv-')) return renderRecv(v.slice(5));
+  if (v.startsWith('recv-')) return reRenderRecv(v.slice(5));
   SALE.view = 'home';
   return renderSales();
 }
@@ -223,21 +223,50 @@ function renderSales() {
     ${todayBrief()}`;
 }
 
+/** 今天（只有今天）開的每一張單，逐筆列出 */
 function todayBrief() {
   const t = todayStr();
   const all = [];
   for (const k of Object.keys(SH_HEAD)) {
-    SALE.rows[k].filter(r => String(r['訂單日期']) === t
-      && String(r['狀態']) !== SALES.VOID && String(r['狀態']) !== SALES.RETURNED).forEach(r => all.push(r));
+    SALE.rows[k].filter(r => String(r['訂單日期']) === t).forEach(r => all.push(r));
   }
   if (!all.length) return `<div class="empty">今天還沒有銷售紀錄</div>`;
-  const sum = all.reduce((s, r) => s + (Number(r['金額'] || r['價格']) || 0), 0);
+
+  const dead = r => String(r['狀態']) === SALES.VOID || String(r['狀態']) === SALES.RETURNED;
+  const live = all.filter(r => !dead(r));
+  const sum = live.reduce((s, r) => s + (Number(r['金額'] || r['價格']) || 0), 0);
   const by = {};
-  all.forEach(r => { by[r._kind] = (by[r._kind] || 0) + 1; });
-  return `<div class="rec-card">
-    <div class="rec-top"><span class="who2">今天共 ${all.length} 筆</span><span class="amt">${money(sum)}</span></div>
-    <div class="rec-meta">${Object.keys(by).map(k => `${SALES.LABEL[k]} ${by[k]} 筆`).join('　·　')}</div>
-  </div>`;
+  live.forEach(r => { by[r._kind] = (by[r._kind] || 0) + 1; });
+
+  // 晚開的排前面
+  all.sort((a, b) => String(b['建立時間'] || '').localeCompare(String(a['建立時間'] || '')));
+
+  const who = r => r._kind === 'shop' ? r['門市']
+    : r._kind === 'dist' ? r['經銷名稱']
+      : r._kind === 'mini' ? `${r['銷售小賣']}${r['客戶名稱'] ? '　' + r['客戶名稱'] : '（自取）'}`
+        : r['客戶名稱'];
+
+  return `<div class="day-sum">
+      <span class="n">${live.length} 筆</span>
+      <span class="amt">${money(sum)}</span>
+      <span class="by">${Object.keys(by).map(k => `${SALES.LABEL[k]} ${by[k]}`).join('　·　') || '—'}</span>
+    </div>
+    <div class="day-list">
+      ${all.map(r => {
+        const paid = r._kind === 'shop' ? '' : String(r['結帳狀態'] || '');
+        const time = String(r['建立時間'] || '').split(' ')[1] || '';
+        return `<div class="day-row${dead(r) ? ' is-void' : ''}">
+          <span class="tm">${sEsc(time)}</span>
+          <span class="kd k-${r._kind}">${SALES.LABEL[r._kind]}</span>
+          <span class="nm">${sEsc(who(r) || '（未填）')}
+            ${dead(r) ? `<i class="void-tag">${sEsc(r['狀態'])}</i>` : ''}</span>
+          <span class="it">${sEsc(String(r['品項明細'] || r['訂單內容'] || '').replace(/\n/g, '、'))}</span>
+          <span class="st">${paid ? `<i class="pill-pay ${paid === '已結帳' ? 'yes' : 'no'}">${sEsc(paid)}</i>` : ''}
+            ${sEsc(r['負責業務'] || '')}</span>
+          <span class="mn">${money(r['金額'] || r['價格'])}</span>
+        </div>`;
+      }).join('')}
+    </div>`;
 }
 
 document.addEventListener('click', e => {
@@ -923,14 +952,81 @@ async function voidShopSale(r) {
 }
 
 /* ----------------------------- 應收待結 -------------------------------- */
+/** 這一筆的「對象」——彙整就是照這個分組 */
+function recvWho(r, kind) {
+  return String((kind === 'dist' ? r['經銷名稱']
+    : kind === 'mini' ? r['銷售小賣']
+      : r['客戶名稱']) || '（未填）').trim() || '（未填）';
+}
+const owedOf = r => (Number(r['價格']) || 0) + (Number(r['運費']) || 0);
+
+/** 第一層：依對象彙整，顯示未結金額。點進去才進第二層 */
 function renderRecv(kind) {
   SALE.view = 'recv-' + kind;
-  const rows = unsettled(kind).slice().reverse();
+  SALE.recvWho = null;
   const name = { dist: '經銷', online: '網路', mini: '小賣' }[kind];
+  const rows = unsettled(kind).filter(r => String(r['結帳狀態']) !== '已結帳');
+  const done = unsettled(kind).filter(r => String(r['結帳狀態']) === '已結帳');
+
+  const bag = new Map();
+  rows.forEach(r => {
+    const w = recvWho(r, kind);
+    const e = bag.get(w) || { who: w, n: 0, owe: 0, oldest: '', ship: 0 };
+    e.n++; e.owe += owedOf(r);
+    if (!e.oldest || String(r['訂單日期']) < e.oldest) e.oldest = String(r['訂單日期']);
+    if (String(r['寄件狀態']) === SALES.SHIP[0]) e.ship++;
+    bag.set(w, e);
+  });
+  const groups = [...bag.values()].sort((a, b) => b.owe - a.owe);
+  const total = groups.reduce((s, g) => s + g.owe, 0);
+
   $('salesView').innerHTML = backBar(name + '應收待結') +
+    (groups.length ? `
+      <div class="recv-total"><span>${groups.length} 個${name === '網路' ? '客戶' : name}未結　·　${rows.length} 張單</span>
+        <b>${money(total)}</b></div>
+      ${groups.map(g => `<button class="sum-card" data-who="${sEsc(g.who)}">
+          <span class="who3">${sEsc(g.who)}</span>
+          <span class="owe">${money(g.owe)}</span>
+          <span class="sub2">${g.n} 張未結　·　最早 ${sEsc(g.oldest || '—')}${g.ship ? `　·　${g.ship} 張未寄出` : ''}<i class="go">點開處理 ›</i></span>
+        </button>`).join('')}`
+      : `<div class="empty">目前沒有未結的${name}訂單 🎉</div>`) +
+    (done.length ? `<div class="sec-title">已結帳、等收起（${done.length}）</div>
+      ${done.map(r => `<button class="sum-card" data-who="${sEsc(recvWho(r, kind))}">
+          <span class="who3">${sEsc(recvWho(r, kind))}</span>
+          <span class="owe" style="color:var(--ok)">${money(owedOf(r))}</span>
+          <span class="sub2">${sEsc(r['訂單日期'])}　·　${sEsc(r['取貨狀態'] || '')}<i class="go">點開處理 ›</i></span>
+        </button>`).join('')}` : '');
+
+  document.querySelectorAll('#salesView .sum-card').forEach(b =>
+    b.onclick = () => renderRecvOne(kind, b.dataset.who));
+}
+
+/** 第二層：這個對象的每一張單，到這裡才能改狀態 */
+function renderRecvOne(kind, who) {
+  SALE.view = 'recv-' + kind;
+  SALE.recvWho = who;
+  const name = { dist: '經銷', online: '網路', mini: '小賣' }[kind];
+  const rows = unsettled(kind).filter(r => recvWho(r, kind) === who)
+    .sort((a, b) => String(a['訂單日期']).localeCompare(String(b['訂單日期'])));
+  const owe = rows.filter(r => String(r['結帳狀態']) !== '已結帳').reduce((s, r) => s + owedOf(r), 0);
+
+  $('salesView').innerHTML = `<div class="sales-head">
+      <button class="btn btn-sm" data-recback="1">← ${sEsc(name)}應收待結</button>
+      <h2>${sEsc(who)}</h2>
+    </div>
+    <div class="recv-total"><span>${rows.length} 張單　·　未結</span><b>${money(owe)}</b></div>` +
     (rows.length ? rows.map(r => recvCard(r, kind)).join('')
-      : `<div class="empty">目前沒有待結的${name}訂單 🎉</div>`);
+      : `<div class="empty">這個${name}沒有待處理的單了</div>`);
+
+  const back = document.querySelector('[data-recback]');
+  if (back) back.onclick = () => renderRecv(kind);
   wireRecv(kind);
+}
+
+/** 存回之後重畫：還在某個對象裡就留在第二層 */
+function reRenderRecv(kind) {
+  if (SALE.recvWho) return renderRecvOne(kind, SALE.recvWho);
+  return renderRecv(kind);
 }
 
 function recvCard(r, kind) {
@@ -984,7 +1080,7 @@ function wireRecv(kind) {
       if (!Object.keys(patch).length) return toast('沒有變更');
       if (patch['結帳狀態'] === '已結帳' && r['結帳狀態'] !== '已結帳') patch['結帳確認者'] = userName() + ' ' + nowStr();
       save.disabled = true; save.textContent = '儲存中…';
-      try { await patchSale(kind, r, patch); await loadSales(); renderRecv(kind); toast('已儲存', 'ok'); }
+      try { await patchSale(kind, r, patch); await loadSales(); reRenderRecv(kind); toast('已儲存', 'ok'); }
       catch (err) { alert('儲存失敗：\n' + err.message); save.disabled = false; save.textContent = '儲存變更'; }
     };
     const ret = card.querySelector('[data-recreturn]');
@@ -1009,7 +1105,7 @@ function wireRecv(kind) {
           狀態: SALES.RETURNED,
           備註: (r['備註'] ? r['備註'] + ' / ' : '') + `${nowStr()} ${userName()} 退貨入庫`
         });
-        await loadSales(); await loadProducts(); renderRecv(kind);
+        await loadSales(); await loadProducts(); reRenderRecv(kind);
         toast('已退貨入庫，庫存已加回', 'ok');
       } catch (err) { alert('失敗：\n' + err.message); ret.disabled = false; ret.textContent = '↩ 退貨入庫'; }
     };
@@ -1026,7 +1122,7 @@ function wireRecv(kind) {
       if (!ok) return;
       try {
         await patchSale(kind, r, { 封存: '是', 結帳確認者: r['結帳確認者'] || (userName() + ' ' + nowStr()) });
-        await loadSales(); renderRecv(kind); toast('已收起', 'ok');
+        await loadSales(); reRenderRecv(kind); toast('已收起', 'ok');
       } catch (err) { alert('失敗：\n' + err.message); }
     };
   });

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="T0.4">
+<meta name="app-version" content="T0.5">
 <title>西門龍門儀錶板</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -253,6 +253,47 @@ textarea{min-height:84px;resize:vertical}
 /* 銷售單卡片列表 */
 .rec-card{background:#fff;border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);
   margin-bottom:12px;padding:14px 16px}
+/* 今日銷售：逐筆列表 */
+.day-sum{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;background:#fff;
+  border:1px solid var(--line);border-radius:var(--r) var(--r) 0 0;border-bottom:0;padding:12px 16px}
+.day-sum .n{font-weight:700;font-size:16px}
+.day-sum .amt{font-weight:700;font-size:16px;font-variant-numeric:tabular-nums;color:var(--brand)}
+.day-sum .by{font-size:12px;color:var(--ink-3);margin-left:auto}
+.day-list{background:#fff;border:1px solid var(--line);border-radius:0 0 var(--r) var(--r);
+  box-shadow:var(--shadow);overflow:hidden}
+.day-row{display:grid;gap:2px 10px;padding:11px 16px;border-top:1px solid var(--line);
+  grid-template-columns:auto auto 1fr auto;align-items:baseline}
+.day-row .tm{font-size:12px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.day-row .kd{font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.day-row .k-shop{background:var(--brand-soft);color:var(--brand)}
+.day-row .k-online{background:#e6f7f3;color:#0f766e}
+.day-row .k-mini{background:var(--violet-soft);color:var(--violet)}
+.day-row .k-dist{background:var(--warn-soft);color:var(--warn)}
+.day-row .nm{font-weight:500;min-width:0;overflow-wrap:anywhere}
+.day-row .mn{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+.day-row .it{grid-column:3/-1;font-size:13px;color:var(--ink-2);overflow-wrap:anywhere}
+.day-row .st{grid-column:3/-1;font-size:12px;color:var(--ink-3);display:flex;gap:7px;align-items:center}
+.day-row .void-tag{font-style:normal;font-size:11px;background:#f1f5f9;color:var(--ink-3);
+  border-radius:4px;padding:1px 6px;margin-left:6px}
+.day-row.is-void{opacity:.55}
+.day-row.is-void .mn{text-decoration:line-through}
+@media(max-width:430px){.day-row{grid-template-columns:auto 1fr auto}.day-row .tm{grid-column:1}}
+
+/* 應收待結：第一層彙整卡 */
+.sum-card{display:grid;grid-template-columns:1fr auto;gap:3px 12px;width:100%;text-align:left;
+  background:#fff;border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);
+  margin-bottom:10px;padding:14px 16px;cursor:pointer;font:inherit;color:inherit;transition:.15s}
+.sum-card:hover{border-color:var(--brand);background:#fcfdff}
+.sum-card .who3{font-weight:700;font-size:16px}
+.sum-card .owe{font-weight:700;font-size:17px;font-variant-numeric:tabular-nums;color:var(--bad);white-space:nowrap}
+.sum-card .sub2{grid-column:1/-1;font-size:12.5px;color:var(--ink-3);
+  display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline}
+.sum-card .go{font-style:normal;font-size:12.5px;color:var(--brand);white-space:nowrap;margin-left:auto}
+.recv-total{display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+  background:var(--bad-soft);border:1px solid #fecaca;border-radius:var(--r);
+  padding:12px 16px;margin-bottom:14px}
+.recv-total b{font-size:18px;font-variant-numeric:tabular-nums;color:var(--bad)}
+
 .rec-card.is-void{opacity:.62;background:#fafafa}
 .rec-card.is-void .amt{text-decoration:line-through}
 .rec-top{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:8px}
@@ -369,7 +410,7 @@ textarea{min-height:84px;resize:vertical}
 <div id="toastHost"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="app.js?v=T0.4"></script>
-<script src="sales.js?v=T0.4"></script>
+<script src="app.js?v=T0.5"></script>
+<script src="sales.js?v=T0.5"></script>
 </body>
 </html>

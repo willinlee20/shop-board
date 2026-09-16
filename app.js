@@ -5,7 +5,7 @@
    ========================================================================= */
 
 /* ----------------------------- 版本 ------------------------------------ */
-const APP_VERSION = '1.6';          // 每次改版都會更新，畫面右上角看得到
+const APP_VERSION = '1.7';          // 每次改版都會更新，畫面右上角看得到
 const APP_DATE = '2026-09-14';
 
 /* ----------------------------- 設定區 -----------------------------------
@@ -534,6 +534,72 @@ async function writeDeltas(deltas) {            // deltas: Map(row → {欄位: 
     }
   }
   await writeRanges(data);
+}
+
+/**
+ * 修改單子時，算出「舊計畫 → 新計畫」的差額。
+ * 不要用「先全部還原、再全部重新預留」——只要其中一步沒跑到（例如舊的
+ * 庫存異動JSON 是空的、或庫存狀態不是「已預留」），沒動到的品項就會被重複扣。
+ * 改成只動真正有變的量：沒改的品項差額是 0，完全不會被碰到。
+ */
+function planDelta(oldPlan, newPlan) {
+  // 舊單可能把來源寫成門市名稱（三重龍門）而不是庫存欄位（三重店），
+  // 沒對齊的話同一個品項會被當成兩筆，舊的退不掉、新的又扣一次。
+  const srcCol = s => {
+    if (!s) return DEFAULT_SRC();
+    if (S.products.cols[s] !== undefined) return s;      // 已經是欄位標題
+    const byLabel = srcOptions().find(o => o.label === s);
+    return byLabel ? byLabel.col : s;
+  };
+  const key = p => resolveRow(p) + '|' + srcCol(p.src);
+  const bag = new Map();                       // key → {row,name,spec,src,old,new}
+  const put = (p, field) => {
+    const k = key(p);
+    const e = bag.get(k) || { row: resolveRow(p), name: p.name, spec: p.spec,
+                              src: srcCol(p.src), old: 0, new: 0 };
+    e[field] += Number(p.qty) || 0;
+    bag.set(k, e);
+  };
+  normPlan(oldPlan).forEach(p => put(p, 'old'));
+  normPlan(newPlan).forEach(p => put(p, 'new'));
+
+  const more = [], less = [];                  // more：要多預留　less：要退回來
+  for (const e of bag.values()) {
+    const d = e.new - e.old;
+    if (d > 0) more.push({ row: e.row, name: e.name, spec: e.spec, src: e.src, qty: d });
+    else if (d < 0) less.push({ row: e.row, name: e.name, spec: e.spec, src: e.src, qty: -d });
+  }
+  return { more, less };
+}
+
+/** 依差額調整庫存：多的再預留、少的退回來。一次寫入，不會有中間狀態 */
+async function applyDelta(delta) {
+  if (!delta.more.length && !delta.less.length) return;
+  await loadProducts();
+  const m = new Map();
+  const add = (row, h, v) => {
+    if (!v || !h) return;
+    const d = m.get(row) || {}; d[h] = (d[h] || 0) + v; m.set(row, d);
+  };
+  for (const p of delta.more) {                // 來源 −N、預定專區 +N
+    const row = resolveRow(p);
+    add(row, p.src || DEFAULT_SRC(), -p.qty);
+    add(row, CONFIG.H.reserve, +p.qty);
+  }
+  for (const p of delta.less) {                // 預定專區 −N、退回來源 +N
+    const row = resolveRow(p);
+    add(row, CONFIG.H.reserve, -p.qty);
+    add(row, p.src || DEFAULT_SRC(), +p.qty);
+  }
+  await writeDeltas(m);
+}
+
+/** 差額的說明文字 */
+function deltaText(delta) {
+  const out = [];
+  delta.less.forEach(p => out.push(`・${`${p.name} ${p.spec || ''}`.trim()} ×${p.qty}　預定專區 −${p.qty} → ${srcLabel(p.src)} +${p.qty}（退回）`));
+  delta.more.forEach(p => out.push(`・${`${p.name} ${p.spec || ''}`.trim()} ×${p.qty}　${srcLabel(p.src)} −${p.qty} → 預定專區 +${p.qty}（多預留）`));
+  return out.length ? out.join('\n') : '（沒有品項或數量變動，庫存不會動）';
 }
 
 /** 把計畫轉成人看得懂的文字，用在確認視窗 */
@@ -1497,19 +1563,27 @@ async function submitForm() {
   }
   if (!changes.length) { closeForm(); return toast('沒有任何變更'); }
 
-  const oldPlan = parseJSON(r['庫存異動JSON'], []);
-  const rework = !!(plan && itemsChanged && r['庫存狀態'] === STOCK.RESERVED);
+  let oldPlan = parseJSON(r['庫存異動JSON'], []);
+  // 有些舊單的「庫存異動JSON」是空的，但庫存狀態寫著已預留——貨其實有扣。
+  // 這種情況要拿「品項JSON」當作已經扣掉的量，否則系統會以為什麼都沒扣，
+  // 把原本就在單子上的品項再扣一次（＝重複扣庫存）。
+  if (!oldPlan.length && r['庫存狀態'] === STOCK.RESERVED) {
+    oldPlan = parseJSON(r['品項JSON'], []);
+  }
+  // 貨還在「預定專區」等著的單才需要動庫存；已出庫、已還原、不適用的都不動。
+  const holding = r['庫存狀態'] !== STOCK.SHIPPED
+                && r['庫存狀態'] !== STOCK.RESTORED
+                && r['庫存狀態'] !== STOCK.NA;
+  const rework = !!(plan && itemsChanged && holding);
+  const delta = rework ? planDelta(oldPlan, plan) : { more: [], less: [] };
+  const hasDelta = !!(delta.more.length || delta.less.length);
 
   const ok = await confirmModal({
     title: '確認修改內容',
     lines: `<p style="font-size:14px;color:var(--ink-2)">這些變更會存進留言板，並記下是「${esc(userName())}」改的：</p>
       <pre class="pre">${esc(changes.join('\n'))}</pre>
-      ${rework ? `<p style="font-size:14px;color:var(--ink-2)">品項或門市有變動，庫存會先把舊的還回去、再依新內容重新預留：</p>
-        <pre class="pre">① 還原舊的
-${esc(planText(oldPlan, 'restore'))}
-
-② 重新預留
-${esc(planText(plan, 'reserve'))}</pre>${shortHTML}` : ''}`,
+      ${rework ? `<p style="font-size:14px;color:var(--ink-2)">庫存<b>只會動有變的部分</b>，沒改到的品項完全不會被碰到：</p>
+        <pre class="pre">${esc(deltaText(delta))}</pre>${hasDelta ? shortHTML : ''}` : ''}`,
     okText: '確定儲存'
   });
   if (!ok) return;
@@ -1517,8 +1591,8 @@ ${esc(planText(plan, 'reserve'))}</pre>${shortHTML}` : ''}`,
   S.busy = true; btn.disabled = true; btn.textContent = '儲存中…';
   try {
     if (rework) {
-      await applyPlan(oldPlan, 'restore');
-      await applyPlan(plan, 'reserve');
+      await applyDelta(delta);
+      if (r['庫存狀態'] !== STOCK.RESERVED) patch['庫存狀態'] = STOCK.RESERVED;
     }
     patch['最後修改時間'] = nowStr();
     patch['最後修改者'] = userName();
