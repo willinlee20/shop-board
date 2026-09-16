@@ -5,8 +5,8 @@
    ========================================================================= */
 
 /* ----------------------------- 版本 ------------------------------------ */
-const APP_VERSION = '1.7';          // 每次改版都會更新，畫面右上角看得到
-const APP_DATE = '2026-09-14';
+const APP_VERSION = '2.0';          // 每次改版都會更新，畫面右上角看得到
+const APP_DATE = '2026-09-16';
 
 /* ----------------------------- 設定區 -----------------------------------
    要改的東西都在這裡，下面的程式不用動。
@@ -325,6 +325,7 @@ async function bootstrap() {
 
   await loadProducts();
   await loadBoard();
+  if (window.initSales) await window.initSales(sheets);      // 銷售紀錄模組
   $('loadingBox').classList.add('hidden');
   render();
   startPoll();
@@ -507,6 +508,10 @@ async function applyPlan(plan, mode, dest) {
     } else if (mode === 'transfer' || mode === 'restore') {
       add(row, CONFIG.H.reserve, -p.qty);
       add(row, dest || src, +p.qty);
+    } else if (mode === 'sell') {          // 銷售單：直接從來源扣掉（不經過預定專區）
+      add(row, src, -p.qty);
+    } else if (mode === 'unsell') {        // 退貨入庫 / 銷售單作廢
+      add(row, src, +p.qty);
     }
   }
   await writeDeltas(m);
@@ -609,6 +614,8 @@ function planText(plan, mode, dest) {
     const src = srcLabel(p.src || DEFAULT_SRC());
     if (mode === 'reserve') return `・${name} ×${p.qty}　${src} −${p.qty} → 預定專區 +${p.qty}`;
     if (mode === 'ship') return `・${name} ×${p.qty}　預定專區 −${p.qty}（出庫，總數減少）`;
+    if (mode === 'sell') return `・${name} ×${p.qty}　${src} −${p.qty}（出售，總數減少）`;
+    if (mode === 'unsell') return `・${name} ×${p.qty}　${src} +${p.qty}（回補庫存）`;
     return `・${name} ×${p.qty}　預定專區 −${p.qty} → ${srcLabel(dest || p.src)} +${p.qty}`;
   }).join('\n');
 }
@@ -793,7 +800,12 @@ document.addEventListener('click', async e => {
     await doAction(b, async () => {
       await applyPlan(plan, 'ship');
       await updateBoardRow(r, { 狀態: STATUS.DONE, 完成時間: nowStr(), 完成者: userName(), 庫存狀態: STOCK.SHIPPED });
-      toast('已完成並扣除庫存', 'ok');
+      let extra = '';
+      if (window.createShopSaleFromOrder) {
+        try { await window.createShopSaleFromOrder(r); extra = '，並開了一張來店銷售單'; }
+        catch (err) { console.warn('自動建立來店銷售單失敗', err); extra = '（來店銷售單建立失敗，請手動補開）'; }
+      }
+      toast('已完成並扣除庫存' + extra, 'ok');
     });
   }
 

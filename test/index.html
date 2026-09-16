@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="T0.5">
+<meta name="app-version" content="T2.0">
 <title>西門龍門儀錶板</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -40,6 +40,11 @@ header{
   width:34px;height:34px;border-radius:10px;background:var(--brand);color:#fff;
   display:grid;place-items:center;font-weight:700;font-size:16px;flex:0 0 auto;
 }
+.logo-mark svg{
+  width:21px;height:21px;fill:none;stroke:currentColor;
+  stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;
+}
+.gate-box .logo-mark svg{width:32px;height:32px;stroke-width:1.7}
 .logo h1{font-size:17px;margin:0;line-height:1.2}
 .ver{font-size:11px;font-weight:500;color:var(--ink-3);background:#f1f5f9;border-radius:5px;padding:1px 6px;vertical-align:2px}
 .ver.bad{background:var(--bad-soft);color:var(--bad)}
@@ -156,9 +161,19 @@ main{max-width:1040px;margin:0 auto;padding:16px 16px 80px}
 .field{margin-bottom:14px}
 .field>label{display:block;font-size:13px;font-weight:500;color:var(--ink-2);margin-bottom:6px}
 .field .req{color:var(--bad)}
-input[type=text],input[type=date],input[type=number],select,textarea{
+input[type=text],input[type=tel],input[type=date],input[type=number],
+input[type=email],input[type=search],input[type=time],select,textarea{
   width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;
 }
+/* 高度統一：日期、數字、下拉的預設高度本來都不一樣 */
+input[type=text],input[type=tel],input[type=date],input[type=number],
+input[type=email],input[type=search],input[type=time],select{
+  height:46px;line-height:1.4;
+}
+/* 數字框的上下小箭頭會把高度撐開，手機也用不到（有數字鍵盤） */
+input[type=number]{-moz-appearance:textfield}
+input[type=number]::-webkit-outer-spin-button,
+input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 input:focus,select:focus,textarea:focus{outline:2px solid var(--brand);outline-offset:-1px;border-color:var(--brand)}
 textarea{min-height:84px;resize:vertical}
 .chips{display:flex;gap:8px;flex-wrap:wrap}
@@ -344,11 +359,42 @@ textarea{min-height:84px;resize:vertical}
 </style>
 </head>
 <body>
+<!-- ══════════════════════════════════════════════════════════════════
+     圖示（LOGO）：要換圖案只要改下面這一個 <symbol> 裡面的內容就好，
+     頁面上兩個地方（登入畫面、頂端列）都會跟著變。
+     另外兩個備用圖案放在最下面，想換就把 d="..." 整段換掉。
+     ══════════════════════════════════════════════════════════════════ -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="logoMark" viewBox="0 0 24 24">
+    <!-- 目前使用：招財貓（舉手招客人） -->
+    <path d="M8.5 4.6 L7.5 1.9 L10.4 3.4"/>
+    <path d="M15.5 4.6 L16.5 1.9 L13.6 3.4"/>
+    <path d="M12 3.2 a4.3 4.3 0 0 0 0 8.6 a4.3 4.3 0 0 0 0-8.6"/>
+    <path d="M10.3 7 v.6"/>
+    <path d="M13.7 7 v.6"/>
+    <path d="M8.4 21 V16.2 a3.6 3.6 0 0 1 7.2 0 V21"/>
+    <path d="M15.4 15.4 L17.6 13"/>
+    <path d="M18.4 11 a1.5 1.5 0 0 0 0 3 a1.5 1.5 0 0 0 0-3"/>
+    <path d="M6.6 21 H17.4"/>
+    <!-- 備用 A・貓臉：
+         <path d="M6.6 7.4 L5.5 3.4 L9.2 5.5"/><path d="M17.4 7.4 L18.5 3.4 L14.8 5.5"/>
+         <path d="M12 5.4 c-4 0-6.9 2.9-6.9 6.6 s2.9 6.6 6.9 6.6 s6.9-2.9 6.9-6.6 s-2.9-6.6-6.9-6.6"/>
+         <path d="M9.6 11.4 v.7"/><path d="M14.4 11.4 v.7"/>
+         <path d="M10.6 14.3 a1.4 1.4 0 0 0 2.8 0"/>
+         <path d="M1.8 11.4 h2.6 M1.8 13.7 h2.4 M19.6 11.4 h2.6 M19.6 13.7 h2.4"/>
+    -->
+    <!-- 備用 B・雙拱門：
+         <path d="M2.5 9 L12 3.2 L21.5 9"/><path d="M4 20 V12.8 a3.2 3.2 0 0 1 6.4 0 V20"/>
+         <path d="M13.6 20 V12.8 a3.2 3.2 0 0 1 6.4 0 V20"/><path d="M2 20 H22"/>
+    -->
+  </symbol>
+</svg>
+
 
 <!-- 登入畫面 -->
 <div id="gate" class="gate">
   <div class="gate-box">
-    <div class="logo-mark">板</div>
+    <div class="logo-mark"><svg><use href="#logoMark"/></svg></div>
     <h1>西門龍門儀錶板</h1>
     <p>三重龍門 × 西門　銷售紀錄 / 工作留言板</p>
     <div id="gateErr" class="err hidden"></div>
@@ -363,7 +409,7 @@ textarea{min-height:84px;resize:vertical}
   <header>
     <div class="head-in">
       <div class="logo">
-        <div class="logo-mark">板</div>
+        <div class="logo-mark"><svg><use href="#logoMark"/></svg></div>
         <div>
           <h1>西門龍門儀錶板 <span id="appVer" class="ver"></span></h1>
           <p id="subhead">三重龍門 × 西門</p>
@@ -410,7 +456,7 @@ textarea{min-height:84px;resize:vertical}
 <div id="toastHost"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="app.js?v=T0.5"></script>
-<script src="sales.js?v=T0.5"></script>
+<script src="app.js?v=T2.0"></script>
+<script src="sales.js?v=T2.0"></script>
 </body>
 </html>

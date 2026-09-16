@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="1.7">
-<title>工作留言板｜三重龍門 × 西門</title>
+<meta name="app-version" content="2.0">
+<title>西門龍門儀錶板</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
@@ -40,6 +40,11 @@ header{
   width:34px;height:34px;border-radius:10px;background:var(--brand);color:#fff;
   display:grid;place-items:center;font-weight:700;font-size:16px;flex:0 0 auto;
 }
+.logo-mark svg{
+  width:21px;height:21px;fill:none;stroke:currentColor;
+  stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;
+}
+.gate-box .logo-mark svg{width:32px;height:32px;stroke-width:1.7}
 .logo h1{font-size:17px;margin:0;line-height:1.2}
 .ver{font-size:11px;font-weight:500;color:var(--ink-3);background:#f1f5f9;border-radius:5px;padding:1px 6px;vertical-align:2px}
 .ver.bad{background:var(--bad-soft);color:var(--bad)}
@@ -156,9 +161,19 @@ main{max-width:1040px;margin:0 auto;padding:16px 16px 80px}
 .field{margin-bottom:14px}
 .field>label{display:block;font-size:13px;font-weight:500;color:var(--ink-2);margin-bottom:6px}
 .field .req{color:var(--bad)}
-input[type=text],input[type=date],input[type=number],select,textarea{
+input[type=text],input[type=tel],input[type=date],input[type=number],
+input[type=email],input[type=search],input[type=time],select,textarea{
   width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;
 }
+/* 高度統一：日期、數字、下拉的預設高度本來都不一樣 */
+input[type=text],input[type=tel],input[type=date],input[type=number],
+input[type=email],input[type=search],input[type=time],select{
+  height:46px;line-height:1.4;
+}
+/* 數字框的上下小箭頭會把高度撐開，手機也用不到（有數字鍵盤） */
+input[type=number]{-moz-appearance:textfield}
+input[type=number]::-webkit-outer-spin-button,
+input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 input:focus,select:focus,textarea:focus{outline:2px solid var(--brand);outline-offset:-1px;border-color:var(--brand)}
 textarea{min-height:84px;resize:vertical}
 .chips{display:flex;gap:8px;flex-wrap:wrap}
@@ -216,6 +231,110 @@ textarea{min-height:84px;resize:vertical}
 .add-item{width:100%;justify-content:center;border-style:dashed;padding:11px}
 .total-bar{display:flex;justify-content:space-between;align-items:center;background:var(--brand-soft);border-radius:10px;padding:11px 14px;font-weight:700;color:var(--brand);margin-top:4px}
 
+
+/* ---------- 模式切換 ---------- */
+.mode-bar{border-top:1px solid var(--line);background:#fff}
+.mode-in{max-width:1040px;margin:0 auto;padding:0 16px;display:flex;gap:4px}
+.mode-tab{
+  border:0;background:transparent;padding:13px 20px;font-size:15px;font-weight:700;
+  color:var(--ink-3);cursor:pointer;border-bottom:3px solid transparent;margin-bottom:-1px;
+}
+.mode-tab:hover{color:var(--ink-2)}
+.mode-tab.on{color:var(--brand);border-bottom-color:var(--brand)}
+
+/* ---------- 銷售紀錄（POS 風格） ---------- */
+.pos-row{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-bottom:18px}
+.pos-btn{
+  background:#fff;border:1px solid var(--line);border-radius:16px;padding:22px 16px;
+  font-size:17px;font-weight:700;cursor:pointer;text-align:center;box-shadow:var(--shadow);
+  transition:.15s;display:flex;flex-direction:column;align-items:center;gap:6px;min-height:96px;
+  justify-content:center;color:var(--ink);
+}
+.pos-btn:hover{border-color:var(--brand);transform:translateY(-1px)}
+.pos-btn .ico{font-size:26px;line-height:1}
+.pos-btn .sub{font-size:12px;font-weight:400;color:var(--ink-3)}
+.pos-btn.primary{background:var(--brand);border-color:var(--brand);color:#fff}
+.pos-btn.primary:hover{background:#1a44bd}
+.pos-btn.primary .sub{color:#c7d6fb}
+.pos-btn .badge{
+  background:var(--bad);color:#fff;border-radius:999px;font-size:12px;padding:1px 9px;font-weight:700;
+}
+.pos-btn.primary .badge{background:#fff;color:var(--brand)}
+
+.sales-head{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+.sales-head h2{margin:0;font-size:19px}
+.sales-head .btn{margin-left:auto}
+
+/* 銷售單卡片列表 */
+.rec-card{background:#fff;border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);
+  margin-bottom:12px;padding:14px 16px}
+/* 今日銷售：逐筆列表 */
+.day-sum{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;background:#fff;
+  border:1px solid var(--line);border-radius:var(--r) var(--r) 0 0;border-bottom:0;padding:12px 16px}
+.day-sum .n{font-weight:700;font-size:16px}
+.day-sum .amt{font-weight:700;font-size:16px;font-variant-numeric:tabular-nums;color:var(--brand)}
+.day-sum .by{font-size:12px;color:var(--ink-3);margin-left:auto}
+.day-list{background:#fff;border:1px solid var(--line);border-radius:0 0 var(--r) var(--r);
+  box-shadow:var(--shadow);overflow:hidden}
+.day-row{display:grid;gap:2px 10px;padding:11px 16px;border-top:1px solid var(--line);
+  grid-template-columns:auto auto 1fr auto;align-items:baseline}
+.day-row .tm{font-size:12px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.day-row .kd{font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.day-row .k-shop{background:var(--brand-soft);color:var(--brand)}
+.day-row .k-online{background:#e6f7f3;color:#0f766e}
+.day-row .k-mini{background:var(--violet-soft);color:var(--violet)}
+.day-row .k-dist{background:var(--warn-soft);color:var(--warn)}
+.day-row .nm{font-weight:500;min-width:0;overflow-wrap:anywhere}
+.day-row .mn{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+.day-row .it{grid-column:3/-1;font-size:13px;color:var(--ink-2);overflow-wrap:anywhere}
+.day-row .st{grid-column:3/-1;font-size:12px;color:var(--ink-3);display:flex;gap:7px;align-items:center}
+.day-row .void-tag{font-style:normal;font-size:11px;background:#f1f5f9;color:var(--ink-3);
+  border-radius:4px;padding:1px 6px;margin-left:6px}
+.day-row.is-void{opacity:.55}
+.day-row.is-void .mn{text-decoration:line-through}
+@media(max-width:430px){.day-row{grid-template-columns:auto 1fr auto}.day-row .tm{grid-column:1}}
+
+/* 應收待結：第一層彙整卡 */
+.sum-card{display:grid;grid-template-columns:1fr auto;gap:3px 12px;width:100%;text-align:left;
+  background:#fff;border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);
+  margin-bottom:10px;padding:14px 16px;cursor:pointer;font:inherit;color:inherit;transition:.15s}
+.sum-card:hover{border-color:var(--brand);background:#fcfdff}
+.sum-card .who3{font-weight:700;font-size:16px}
+.sum-card .owe{font-weight:700;font-size:17px;font-variant-numeric:tabular-nums;color:var(--bad);white-space:nowrap}
+.sum-card .sub2{grid-column:1/-1;font-size:12.5px;color:var(--ink-3);
+  display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline}
+.sum-card .go{font-style:normal;font-size:12.5px;color:var(--brand);white-space:nowrap;margin-left:auto}
+.recv-total{display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+  background:var(--bad-soft);border:1px solid #fecaca;border-radius:var(--r);
+  padding:12px 16px;margin-bottom:14px}
+.recv-total b{font-size:18px;font-variant-numeric:tabular-nums;color:var(--bad)}
+
+.rec-card.is-void{opacity:.62;background:#fafafa}
+.rec-card.is-void .amt{text-decoration:line-through}
+.rec-top{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:8px}
+.rec-top .who2{font-weight:700;font-size:16px;flex:1 1 auto;min-width:0}
+.rec-top .amt{font-weight:700;font-size:16px;font-variant-numeric:tabular-nums}
+.rec-meta{font-size:12px;color:var(--ink-3);margin-bottom:10px}
+.rec-items{font-size:13.5px;color:var(--ink-2);white-space:pre-wrap;background:#f8fafc;
+  border-radius:9px;padding:8px 11px;margin-bottom:10px}
+.st-grid{display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.st-grid label{display:block;font-size:11.5px;color:var(--ink-3);margin-bottom:3px}
+.st-grid select,.st-grid input{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:#fff}
+.rec-foot{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center}
+.pill-pay{font-size:12px;font-weight:700;padding:3px 10px;border-radius:999px}
+.pill-pay.no{background:var(--bad-soft);color:var(--bad)}
+.pill-pay.yes{background:var(--ok-soft);color:var(--ok)}
+
+/* 表單：大按鈕風格 */
+.big-chips{display:flex;gap:8px;flex-wrap:wrap}
+.big-chips .chip{padding:13px 18px;font-size:15px;border-radius:12px}
+.sale-form input[type=number]{font-size:17px;padding:13px 12px}
+.hint-row{font-size:12.5px;color:var(--ink-3);margin-top:5px}
+.check-inline{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);
+  border-radius:10px;padding:10px 14px;cursor:pointer;background:#fff;font-size:14px}
+.check-inline.on{border-color:var(--brand);background:var(--brand-soft);color:var(--brand);font-weight:500}
+.check-inline input{width:18px;height:18px;accent-color:var(--brand)}
+
 /* ---------- 登入 / 載入 ---------- */
 .gate{min-height:100vh;display:grid;place-items:center;padding:24px}
 .gate-box{background:#fff;border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);padding:34px 28px;max-width:400px;text-align:center}
@@ -238,13 +357,44 @@ textarea{min-height:84px;resize:vertical}
 </style>
 </head>
 <body>
+<!-- ══════════════════════════════════════════════════════════════════
+     圖示（LOGO）：要換圖案只要改下面這一個 <symbol> 裡面的內容就好，
+     頁面上兩個地方（登入畫面、頂端列）都會跟著變。
+     另外兩個備用圖案放在最下面，想換就把 d="..." 整段換掉。
+     ══════════════════════════════════════════════════════════════════ -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="logoMark" viewBox="0 0 24 24">
+    <!-- 目前使用：招財貓（舉手招客人） -->
+    <path d="M8.5 4.6 L7.5 1.9 L10.4 3.4"/>
+    <path d="M15.5 4.6 L16.5 1.9 L13.6 3.4"/>
+    <path d="M12 3.2 a4.3 4.3 0 0 0 0 8.6 a4.3 4.3 0 0 0 0-8.6"/>
+    <path d="M10.3 7 v.6"/>
+    <path d="M13.7 7 v.6"/>
+    <path d="M8.4 21 V16.2 a3.6 3.6 0 0 1 7.2 0 V21"/>
+    <path d="M15.4 15.4 L17.6 13"/>
+    <path d="M18.4 11 a1.5 1.5 0 0 0 0 3 a1.5 1.5 0 0 0 0-3"/>
+    <path d="M6.6 21 H17.4"/>
+    <!-- 備用 A・貓臉：
+         <path d="M6.6 7.4 L5.5 3.4 L9.2 5.5"/><path d="M17.4 7.4 L18.5 3.4 L14.8 5.5"/>
+         <path d="M12 5.4 c-4 0-6.9 2.9-6.9 6.6 s2.9 6.6 6.9 6.6 s6.9-2.9 6.9-6.6 s-2.9-6.6-6.9-6.6"/>
+         <path d="M9.6 11.4 v.7"/><path d="M14.4 11.4 v.7"/>
+         <path d="M10.6 14.3 a1.4 1.4 0 0 0 2.8 0"/>
+         <path d="M1.8 11.4 h2.6 M1.8 13.7 h2.4 M19.6 11.4 h2.6 M19.6 13.7 h2.4"/>
+    -->
+    <!-- 備用 B・雙拱門：
+         <path d="M2.5 9 L12 3.2 L21.5 9"/><path d="M4 20 V12.8 a3.2 3.2 0 0 1 6.4 0 V20"/>
+         <path d="M13.6 20 V12.8 a3.2 3.2 0 0 1 6.4 0 V20"/><path d="M2 20 H22"/>
+    -->
+  </symbol>
+</svg>
+
 
 <!-- 登入畫面 -->
 <div id="gate" class="gate">
   <div class="gate-box">
-    <div class="logo-mark">板</div>
-    <h1>工作留言板</h1>
-    <p>三重龍門 × 西門　交接班 / 客戶預訂 / 例行工作</p>
+    <div class="logo-mark"><svg><use href="#logoMark"/></svg></div>
+    <h1>西門龍門儀錶板</h1>
+    <p>三重龍門 × 西門　銷售紀錄 / 工作留言板</p>
     <div id="gateErr" class="err hidden"></div>
     <button id="loginBtn" class="btn btn-primary">使用 Google 帳號登入</button>
     <p style="margin:16px 0 0;font-size:12px;color:var(--ink-3)">請使用有「進銷存總表」權限的公司帳號</p>
@@ -256,9 +406,9 @@ textarea{min-height:84px;resize:vertical}
   <header>
     <div class="head-in">
       <div class="logo">
-        <div class="logo-mark">板</div>
+        <div class="logo-mark"><svg><use href="#logoMark"/></svg></div>
         <div>
-          <h1>工作留言板 <span id="appVer" class="ver"></span></h1>
+          <h1>西門龍門儀錶板 <span id="appVer" class="ver"></span></h1>
           <p id="subhead">三重龍門 × 西門</p>
         </div>
       </div>
@@ -267,25 +417,35 @@ textarea{min-height:84px;resize:vertical}
         <span id="uName"></span>
       </div>
       <button id="refreshBtn" class="btn btn-sm" title="重新整理">↻ 更新</button>
-      <button id="newBtnTop" class="btn btn-primary btn-sm">＋ 新增留言</button>
-      <a class="btn btn-ghost btn-sm" href="guide.html" target="_blank" rel="noopener">操作說明</a>
       <button id="logoutBtn" class="btn btn-ghost btn-sm">登出</button>
+    </div>
+    <div class="mode-bar">
+      <div class="mode-in">
+        <button class="mode-tab" data-mode="sales">銷售紀錄</button>
+        <button class="mode-tab on" data-mode="board">工作留言板</button>
+      </div>
     </div>
   </header>
 
   <main>
-    <div class="toolbar">
-      <div class="seg" id="storeSeg">
-        <button data-store="全部" class="on">全部門市</button>
-        <button data-store="三重龍門">三重龍門</button>
-        <button data-store="西門">西門</button>
+    <div id="boardView">
+      <div class="toolbar">
+        <div class="seg" id="storeSeg">
+          <button data-store="全部" class="on">全部門市</button>
+          <button data-store="三重龍門">三重龍門</button>
+          <button data-store="西門">西門</button>
+        </div>
+        <button id="newBtnTop" class="btn btn-primary btn-sm">＋ 新增留言</button>
+        <a class="btn btn-sm" href="../guide.html" target="_blank" rel="noopener">操作說明</a>
+        <span class="spacer"></span>
+        <span class="count-pill" id="pendingCount">待處理 0</span>
       </div>
-      <span class="spacer"></span>
-      <span class="count-pill" id="pendingCount">待處理 0</span>
+
+      <div id="loadingBox" class="loading"><div class="spin"></div><span>正在讀取留言板與庫存…</span></div>
+      <div id="listWrap"></div>
     </div>
 
-    <div id="loadingBox" class="loading"><div class="spin"></div><span>正在讀取留言板與庫存…</span></div>
-    <div id="listWrap"></div>
+    <div id="salesView" class="hidden"></div>
   </main>
 </div>
 
@@ -293,6 +453,7 @@ textarea{min-height:84px;resize:vertical}
 <div id="toastHost"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="app.js?v=1.7"></script>
+<script src="app.js?v=2.0"></script>
+<script src="sales.js?v=2.0"></script>
 </body>
 </html>
