@@ -892,23 +892,92 @@ function wireShopLog() {
 }
 
 /* ---- 修改來店單 ---- */
-function openShopEdit(r) {
+const openShopEdit = r => openSaleEdit('shop', r);
+
+/** 把品項還原成經銷單的「產品 → 規格表格」結構 */
+function groupsFromSaleItems(items) {
+  const out = [];
+  items.forEach(i => {
+    let g = out.find(x => x.name === i.name);
+    if (!g) { g = { cat: (S.products.byRow.get(i.row) || {}).cat || null, name: i.name, qty: {}, price: {} }; out.push(g); }
+    g.qty[i.row] = (Number(g.qty[i.row]) || 0) + (Number(i.qty) || 0);
+    g.price[i.row] = Number(i.price) || 0;
+  });
+  return out.length ? out : [newDistGroup()];
+}
+
+/** 開啟「修改銷售單」：四種單別共用 */
+function openSaleEdit(kind, r) {
   const items = parseJSON(r['品項JSON'], []);
-  openSaleForm('shop');
+  openSaleForm(kind);
   const f = SALE.form;
   f.editRow = r;
   f.date = r['訂單日期'] || todayStr();
-  f.store = r['門市'] || CONFIG.STORES[0].label;
   f.staff = r['負責業務'] || '';
   f.note = r['備註'] || '';
-  f.items = items.length
-    ? items.map(i => ({ cat: (S.products.byRow.get(i.row) || {}).cat || null, name: i.name, row: i.row, qty: Number(i.qty) || 1, price: Number(i.price) || 0 }))
-    : [newSaleItem()];
+  f.fee = r['運費'] === '' || r['運費'] === undefined ? '' : String(r['運費']);
+  const list = items.map(i => ({
+    cat: (S.products.byRow.get(i.row) || {}).cat || null,
+    name: i.name, row: i.row, qty: Number(i.qty) || 1, price: Number(i.price) || 0
+  }));
+  f.items = list.length ? list : [newSaleItem()];
+  f.groups = groupsFromSaleItems(list);
+
+  if (kind === 'shop') {
+    f.store = r['門市'] || CONFIG.STORES[0].label;
+  }
+  if (kind === 'online') {
+    f.cName = r['客戶名稱'] || ''; f.tel = r['電話'] || '';
+    f.sendWay = SALES.SEND_WAY.includes(r['寄送方式']) ? r['寄送方式'] : SALES.SEND_WAY[0];
+    f.storeName = r['店名'] || '';
+    f.collect = SALES.COLLECT.includes(r['收款方式']) ? r['收款方式']
+      : (String(r['結帳狀態']) === '已結帳' ? SALES.COLLECT_PAID : SALES.COLLECT[1]);
+    f.payDate = r['結帳日'] || '';
+    const tag = String(r['庫存狀態'] || '');
+    const hit = SALES.NOSTOCK.find(o => tag.includes(o.tag));
+    f.noStock = hit ? hit.key : '';
+  }
+  if (kind === 'mini') {
+    f.miniName = r['銷售小賣'] || (SALE.lists.mini[0] || {}).name || '';
+    f.cName = r['客戶名稱'] || ''; f.tel = r['電話'] || '';
+    f.selfPick = String(r['小賣自取']) === '是';
+    f.pickup = pickupOptions().includes(r['取貨方式']) ? r['取貨方式'] : pickupOptions()[0];
+    f.sendWay = SALES.SEND_WAY.includes(r['寄送方式']) ? r['寄送方式'] : SALES.SEND_WAY[0];
+    f.storeName = r['店名'] || '';
+    f.payStatus = SALES.PAY.includes(r['結帳狀態']) ? r['結帳狀態'] : SALES.PAY[0];
+    f.payDate = r['結帳日'] || '';
+  }
+  if (kind === 'dist') {
+    f.distName = r['經銷名稱'] || (SALE.lists.dist[0] || {}).name || '';
+    f.distTel = r['經銷聯絡電話'] || '';
+    f.dSendWay = SALES.DIST_SEND_WAY.includes(r['寄送方式']) ? r['寄送方式'] : SALES.DIST_SEND_WAY[0];
+    f.useDefault = false;                       // 修改時不要蓋掉已填的收件資料
+    f.rShop = r['收貨門市'] === SALES.NA ? '' : (r['收貨門市'] || '');
+    f.rAddr = r['宅配地址'] === SALES.NA ? '' : (r['宅配地址'] || '');
+    f.rName = r['收貨人'] || ''; f.rTel = r['收貨人電話'] || '';
+    f.payStatus = SALES.PAY.includes(r['結帳狀態']) ? r['結帳狀態'] : SALES.PAY[0];
+    f.payDate = r['結帳日'] || '';
+  }
+
   const head = document.querySelector('.sale-form .sheet-head h2');
-  if (head) head.textContent = '修改來店銷售單';
+  if (head) head.textContent = `修改${SALES.LABEL[kind]}銷售單`;
   const btn = $('submitSale');
   if (btn) btn.textContent = '儲存修改';
   renderSaleBody();
+}
+
+/** 銷售單改品項：只動有變的量（跟留言板同一套邏輯，不會重複扣） */
+async function applySaleDelta(oldPlan, newPlan) {
+  const d = planDelta(oldPlan, newPlan);
+  if (d.less.length) await applyPlan(d.less, 'unsell');   // 退回來
+  if (d.more.length) await applyPlan(d.more, 'sell');     // 再扣掉
+  return d;
+}
+function saleDeltaText(d) {
+  const out = [];
+  d.less.forEach(p => out.push(`・${`${p.name} ${p.spec || ''}`.trim()} ×${p.qty}　${srcLabel(p.src)} +${p.qty}（退回）`));
+  d.more.forEach(p => out.push(`・${`${p.name} ${p.spec || ''}`.trim()} ×${p.qty}　${srcLabel(p.src)} −${p.qty}（再扣）`));
+  return out.length ? out.join('\n') : '（品項和數量沒變，庫存不會動）';
 }
 
 function shopDiff(r, f, items) {
@@ -916,37 +985,62 @@ function shopDiff(r, f, items) {
   const cmp = (label, oldV, newV) => {
     if (String(oldV ?? '') !== String(newV ?? '')) out.push(`${label}：${oldV || '（空）'} → ${newV || '（空）'}`);
   };
+  const k = f.kind;
   cmp('訂單日期', r['訂單日期'], f.date);
-  cmp('門市', r['門市'], f.store);
+  if (k === 'shop') cmp('門市', r['門市'], f.store);
+  if (k === 'online' || k === 'mini') { cmp('客戶名稱', r['客戶名稱'], f.cName.trim()); cmp('電話', r['電話'], f.tel.trim()); }
+  if (k === 'online') {
+    cmp('寄送方式', r['寄送方式'], f.sendWay); cmp('店名', r['店名'], f.storeName.trim());
+    cmp('結帳狀態', r['收款方式'], f.collect);
+    cmp('庫存處理', r['庫存狀態'], skipStock() ? `不扣（${noStockTags().join('、')}）` : '已扣庫存');
+  }
+  if (k === 'mini') {
+    cmp('銷售小賣', r['銷售小賣'], f.miniName); cmp('取貨方式', r['取貨方式'], f.pickup);
+    cmp('小賣自取', r['小賣自取'], f.selfPick ? '是' : '否');
+  }
+  if (k === 'dist') {
+    cmp('經銷名稱', r['經銷名稱'], f.distName); cmp('寄送方式', r['寄送方式'], f.dSendWay);
+    cmp('收貨人', r['收貨人'], f.rName.trim());
+  }
+  if (k !== 'shop') { cmp('運費', r['運費'], f.fee === '' ? '' : String(Number(f.fee) || 0)); }
   cmp('負責業務', r['負責業務'], f.staff);
   cmp('備註', r['備註'], f.note.trim());
   const oldT = itemsText(parseJSON(r['品項JSON'], []));
+  void 0;
   const newT = itemsText(items);
   if (oldT !== newT) out.push(`品項：\n${oldT || '（空）'}\n→\n${newT}`);
-  const oldA = Number(r['金額']) || 0, newA = itemsTotal(items);
-  if (oldA !== newA) out.push(`金額：${money(oldA)} → ${money(newA)}`);
+  const amtKey = f.kind === 'shop' ? '金額' : '價格';
+  const oldA = Number(r[amtKey]) || 0, newA = itemsTotal(items);
+  if (oldA !== newA) out.push(`${amtKey}：${money(oldA)} → ${money(newA)}`);
   return out;
 }
 
 async function submitShopEdit() {
-  const f = SALE.form, r = f.editRow, btn = $('submitSale');
+  const f = SALE.form, r = f.editRow, k = f.kind, btn = $('submitSale');
   const items = saleItemList();
   if (!f.date) return alert('請選擇訂單日期');
   if (!items.length) return alert('請選擇訂單內容');
   if (!f.staff) return alert('請選擇負責業務');
+  if (k === 'online' && !f.cName.trim()) return alert('請填寫客戶名稱');
+  if (k === 'mini' && !f.selfPick && !f.cName.trim()) return alert('請填寫客戶名稱，或勾選「小賣自取」');
+  if (k === 'dist' && f.dSendWay === SALES.HOME_DELIVERY && !f.rAddr.trim()) return alert('選擇宅配時請填寫宅配地址');
 
-  const linked = shopLinked(r);
+  // 這張單現在還扣不扣庫存
+  const linked = k === 'shop' && shopLinked(r);
+  const noStock = k === 'online' && skipStock();
+  const frozen = linked || noStock;
   const oldPlan = normPlan(parseJSON(r['庫存異動JSON'], []));
-  const newPlan = linked ? [] : items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, src: i.src }));
+  const newPlan = frozen ? [] : items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, src: i.src }));
   const diff = shopDiff(r, f, items);
   if (!diff.length) return alert('沒有任何變更。');
 
+  const delta = planDelta(oldPlan, newPlan);
+  const hasDelta = !!(delta.more.length || delta.less.length);
   const stockLines = linked
     ? '<p style="font-size:14px;color:var(--ink-2)">這張單來自預訂單，<b>不會動到庫存</b>。</p>'
-    : `${oldPlan.length ? `<p style="font-size:14px;color:var(--ink-2)">① 先把原本扣的<b>還回去</b>：</p>
-        <pre class="pre">${esc(planText(oldPlan, 'unsell'))}</pre>` : ''}
-       <p style="font-size:14px;color:var(--ink-2)">② 再依新內容<b>重新扣</b>：</p>
-       <pre class="pre">${esc(planText(newPlan, 'sell'))}</pre>`;
+    : `<p style="font-size:14px;color:var(--ink-2)">庫存<b>只會動有變的部分</b>，沒改到的品項完全不會被碰到：</p>
+       <pre class="pre">${esc(saleDeltaText(delta))}</pre>
+       ${noStock ? `<div class="alert-box">🚫 這張單現在是<b>不扣庫存</b>（${sEsc(noStockTags().join('、'))}）${oldPlan.length ? '，原本扣掉的會退回來' : ''}。</div>` : ''}`;
 
   const ok = await confirmModal({
     title: '確認儲存這些修改？',
@@ -957,21 +1051,60 @@ async function submitShopEdit() {
 
   S.busy = true; btn.disabled = true; btn.textContent = '儲存中…';
   try {
-    if (!linked) {
-      if (oldPlan.length) await applyPlan(oldPlan, 'unsell');
-      await applyPlan(newPlan, 'sell');
-    }
-    const log = (String(r['修改紀錄'] || '') + `\n${nowStr()} ${userName()}：${diff.join('；').replace(/\n/g, ' ')}`).trim();
-    await patchSale('shop', r, {
-      訂單日期: f.date, 門市: f.store, 負責業務: f.staff, 備註: f.note.trim(),
-      品項明細: itemsText(items), 金額: itemsTotal(items), 成本: costOf(items),
+    if (hasDelta) await applySaleDelta(oldPlan, newPlan);
+
+    const total = itemsTotal(items);
+    const patch = {
+      訂單日期: f.date, 負責業務: f.staff, 備註: f.note.trim(), 成本: costOf(items),
       品項JSON: JSON.stringify(items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, price: i.price }))),
-      庫存異動JSON: linked ? '[]' : JSON.stringify(newPlan),
-      最後修改時間: nowStr(), 最後修改者: userName(), 修改紀錄: log
-    });
+      庫存異動JSON: frozen ? '[]' : JSON.stringify(newPlan)
+    };
+    if (k === 'shop') {
+      Object.assign(patch, {
+        門市: f.store, 品項明細: itemsText(items), 金額: total,
+        最後修改時間: nowStr(), 最後修改者: userName(),
+        修改紀錄: (String(r['修改紀錄'] || '') + `\n${nowStr()} ${userName()}：${diff.join('；').replace(/\n/g, ' ')}`).trim()
+      });
+    } else {
+      Object.assign(patch, { 訂單內容: itemsText(items), 價格: total, 運費: Number(f.fee) || 0 });
+      patch['備註'] = (f.note.trim() ? f.note.trim() + ' / ' : '')
+        + `${nowStr()} ${userName()} 修改：${diff.join('；').replace(/\n/g, ' ')}`;
+    }
+    if (k === 'online') {
+      const paidNow = f.collect === SALES.COLLECT_PAID;
+      Object.assign(patch, {
+        客戶名稱: f.cName.trim(), 電話: f.tel.trim(),
+        寄送方式: f.sendWay, 店名: f.storeName.trim(),
+        收款方式: f.collect, 結帳狀態: paidNow ? '已結帳' : '未結帳',
+        結帳日: paidNow ? (f.payDate || f.date) : '',
+        庫存狀態: noStock ? `不扣（${noStockTags().join('、')}）` : '已扣庫存'
+      });
+    }
+    if (k === 'mini') {
+      const isSelf = f.selfPick, posting = f.pickup === '寄送';
+      Object.assign(patch, {
+        銷售小賣: f.miniName, 客戶名稱: f.cName.trim(), 小賣自取: isSelf ? '是' : '否',
+        電話: isSelf ? SALES.NA : f.tel.trim(), 取貨方式: f.pickup,
+        寄送方式: isSelf ? SALES.NA : (posting ? f.sendWay : SALES.NA),
+        店名: isSelf ? SALES.NA : (posting ? f.storeName.trim() : SALES.NA),
+        結帳狀態: f.payStatus, 結帳日: f.payDate
+      });
+    }
+    if (k === 'dist') {
+      const home = f.dSendWay === SALES.HOME_DELIVERY;
+      Object.assign(patch, {
+        經銷名稱: f.distName, 經銷聯絡電話: f.distTel.trim(), 寄送方式: f.dSendWay,
+        收貨門市: home ? SALES.NA : f.rShop.trim(),
+        宅配地址: home ? f.rAddr.trim() : SALES.NA,
+        收貨人: f.rName.trim(), 收貨人電話: f.rTel.trim(),
+        結帳狀態: f.payStatus, 結帳日: f.payDate
+      });
+    }
+
+    await patchSale(k, r, patch);
     $('modalHost').innerHTML = ''; SALE.form = null;
     await loadSales(); await loadProducts();
-    renderShopLog();
+    if (k === 'shop') renderShopLog(); else reRenderRecv(k);
     toast('已儲存修改', 'ok');
   } catch (err) {
     alert('儲存失敗：\n\n' + err.message);
@@ -1132,6 +1265,7 @@ function pickCard(r, kind) {
     <div class="rec-foot">
       <span class="meta">${r['結帳確認者'] ? '結帳：' + sEsc(r['結帳確認者']) : ''}</span>
       <button class="btn btn-sm" data-recsave="1">儲存變更</button>
+      ${dead ? '' : `<button class="btn btn-sm" data-recedit="1">✎ 改單</button>`}
       ${canReturn ? `<button class="btn btn-sm btn-danger" data-recreturn="1">↩ 退貨入庫</button>` : ''}
       ${dead ? '' : `<button class="btn btn-sm btn-danger" data-recvoid="1">🗑 訂單作廢</button>`}
       ${canClose ? `<button class="btn btn-sm btn-ok" data-recclose="1">✓ 完成並收起</button>` : ''}
@@ -1205,6 +1339,7 @@ function recvCard(r, kind) {
     <div class="rec-foot">
       <span class="meta">${r['結帳確認者'] ? '結帳確認：' + sEsc(r['結帳確認者']) : ''}</span>
       <button class="btn btn-sm" data-recsave="1">儲存變更</button>
+      ${returned || String(r['狀態']) === SALES.VOID ? '' : `<button class="btn btn-sm" data-recedit="1">✎ 改單</button>`}
       ${canReturn ? `<button class="btn btn-sm btn-danger" data-recreturn="1">↩ 退貨入庫</button>` : ''}
       ${returned || String(r['狀態']) === SALES.VOID ? '' : `<button class="btn btn-sm btn-danger" data-recvoid="1">🗑 訂單作廢</button>`}
       ${canClose ? `<button class="btn btn-sm btn-ok" data-recclose="1">✓ 完成並收起</button>` : ''}
@@ -1263,6 +1398,9 @@ function wireRecv(kind) {
         toast('已退貨入庫，庫存已加回', 'ok');
       } catch (err) { alert('失敗：\n' + err.message); ret.disabled = false; ret.textContent = '↩ 退貨入庫'; }
     };
+
+    const ed = card.querySelector('[data-recedit]');
+    if (ed) ed.onclick = () => openSaleEdit(kind, r);
 
     const vd = card.querySelector('[data-recvoid]');
     if (vd) vd.onclick = () => voidSale(kind, r);
