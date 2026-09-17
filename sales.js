@@ -1227,7 +1227,12 @@ function pickCard(r, kind) {
   const returned = String(r['狀態']) === SALES.RETURNED;
   const voided = String(r['狀態']) === SALES.VOID;
   const dead = returned || voided;
-  const canReturn = SALES.RETURN_PICK.includes(String(r['取貨狀態'])) && !dead;
+  // 已經寄出去的只能「退貨入庫」，還沒寄的才是「訂單作廢」——同一批貨不會有兩顆按鈕
+  const shipped = String(r['寄件狀態']) === SALES.SHIP[1]
+    || SALES.RETURN_PICK.includes(String(r['取貨狀態']))
+    || SALES.DONE_PICK.includes(String(r['取貨狀態']));
+  const canReturn = shipped && !dead;
+  const canVoid = !shipped && !dead;
   const canClose = (paid && SALES.DONE_PICK.includes(String(r['取貨狀態']))) || dead;
   const noStock = String(r['庫存狀態'] || '').startsWith('不扣');
   const chips = (field, list, cur) => `<div class="pick-row">
@@ -1267,7 +1272,7 @@ function pickCard(r, kind) {
       <button class="btn btn-sm" data-recsave="1">儲存變更</button>
       ${dead ? '' : `<button class="btn btn-sm" data-recedit="1">✎ 改單</button>`}
       ${canReturn ? `<button class="btn btn-sm btn-danger" data-recreturn="1">↩ 退貨入庫</button>` : ''}
-      ${dead ? '' : `<button class="btn btn-sm btn-danger" data-recvoid="1">🗑 訂單作廢</button>`}
+      ${canVoid ? `<button class="btn btn-sm btn-danger" data-recvoid="1">🗑 訂單作廢</button>` : ''}
       ${canClose ? `<button class="btn btn-sm btn-ok" data-recclose="1">✓ 完成並收起</button>` : ''}
     </div></div>`;
 }
@@ -1304,7 +1309,12 @@ function recvCard(r, kind) {
   const who = kind === 'dist' ? r['經銷名稱'] : kind === 'mini' ? `${r['銷售小賣']}　${r['客戶名稱'] || '（小賣自取）'}` : r['客戶名稱'];
   const paid = r['結帳狀態'] === '已結帳';
   const returned = String(r['狀態']) === SALES.RETURNED;
-  const canReturn = SALES.RETURN_PICK.includes(String(r['取貨狀態'])) && !returned;
+  const voided2 = String(r['狀態']) === SALES.VOID;
+  const shipped = String(r['寄件狀態']) === SALES.SHIP[1]
+    || SALES.RETURN_PICK.includes(String(r['取貨狀態']))
+    || SALES.DONE_PICK.includes(String(r['取貨狀態']));
+  const canReturn = shipped && !returned && !voided2;
+  const canVoid = !shipped && !returned && !voided2;
   const canClose = (paid && SALES.DONE_PICK.includes(String(r['取貨狀態']))) || returned;
   const na = v => String(v) === SALES.NA;
   return `<div class="rec-card" data-id="${sEsc(r.id)}" data-row="${r._row}">
@@ -1339,9 +1349,9 @@ function recvCard(r, kind) {
     <div class="rec-foot">
       <span class="meta">${r['結帳確認者'] ? '結帳確認：' + sEsc(r['結帳確認者']) : ''}</span>
       <button class="btn btn-sm" data-recsave="1">儲存變更</button>
-      ${returned || String(r['狀態']) === SALES.VOID ? '' : `<button class="btn btn-sm" data-recedit="1">✎ 改單</button>`}
+      ${returned || voided2 ? '' : `<button class="btn btn-sm" data-recedit="1">✎ 改單</button>`}
       ${canReturn ? `<button class="btn btn-sm btn-danger" data-recreturn="1">↩ 退貨入庫</button>` : ''}
-      ${returned || String(r['狀態']) === SALES.VOID ? '' : `<button class="btn btn-sm btn-danger" data-recvoid="1">🗑 訂單作廢</button>`}
+      ${canVoid ? `<button class="btn btn-sm btn-danger" data-recvoid="1">🗑 訂單作廢</button>` : ''}
       ${canClose ? `<button class="btn btn-sm btn-ok" data-recclose="1">✓ 完成並收起</button>` : ''}
     </div></div>`;
 }
@@ -1355,13 +1365,23 @@ function wireRecv(kind) {
       const ev = el.tagName === 'SELECT' ? 'onchange' : 'oninput';
       el[ev] = e => { patch[el.dataset.f] = e.target.value; };
     });
-    // 狀態按鈕：點了先記在 patch，按「儲存變更」才寫回
-    card.querySelectorAll('.pchip').forEach(b => b.onclick = () => {
-      const f = b.dataset.chip;
-      patch[f] = b.dataset.val;
-      card.querySelectorAll(`.pchip[data-chip="${f}"]`).forEach(x => x.classList.toggle('on', x === b));
-      const sv = card.querySelector('[data-recsave]');
-      if (sv) { sv.classList.add('btn-primary'); sv.textContent = '● 儲存變更'; }
+    // 狀態按鈕：點了直接存（連同旁邊還沒存的文字欄位一起），存完重畫，
+    // 這樣按了「已寄出」之後「退貨入庫」才會馬上出現，不用先按一次儲存
+    card.querySelectorAll('.pchip').forEach(b => b.onclick = async () => {
+      if (b.classList.contains('on')) return;
+      const fld = b.dataset.chip;
+      patch[fld] = b.dataset.val;
+      card.querySelectorAll(`.pchip[data-chip="${fld}"]`).forEach(x => x.classList.toggle('on', x === b));
+      if (patch['結帳狀態'] === '已結帳' && r['結帳狀態'] !== '已結帳') patch['結帳確認者'] = userName() + ' ' + nowStr();
+      card.querySelectorAll('.pchip').forEach(x => x.disabled = true);
+      try {
+        await patchSale(kind, r, patch);
+        await loadSales(); reRenderRecv(kind);
+        toast(`${fld}改成「${b.dataset.val}」`, 'ok');
+      } catch (err) {
+        alert('儲存失敗：\n' + err.message);
+        card.querySelectorAll('.pchip').forEach(x => x.disabled = false);
+      }
     });
 
     const save = card.querySelector('[data-recsave]');
