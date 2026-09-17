@@ -22,6 +22,11 @@ const SALES = {
   COLLECT: ['已收貨款', '貨到付款'],
   COLLECT_PAID: '已收貨款',              // 選這個 → 結帳狀態直接帶「已結帳」
   VOID: '已作廢',
+  // 網路單：這兩種情況不扣總倉庫存（貨不是從我們倉庫出的）
+  NOSTOCK: [
+    { key: 'agent', label: '本訂單廠商代出（不扣總倉庫存）', tag: '廠商代出' },
+    { key: 'order', label: '非常備商品，待調貨後出貨（不扣總倉庫存）', tag: '待調貨' }
+  ],
 
   SHIP:   ['未寄出', '已寄出'],
   PICK:   ['未取件', '已取件', '已送達', '未送達', '即將退貨', '退貨路上', '包裹異常'],
@@ -44,7 +49,7 @@ const SH_HEAD = {
   online: ['id', '訂單日期', '建立時間', '建立者', '客戶名稱', '電話', '訂單內容', '價格', '運費', '成本',
            '收款方式', '寄送方式', '店名',
            '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '備註',
-           '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態'],
+           '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態', '庫存狀態'],
   mini: ['id', '訂單日期', '建立時間', '建立者', '銷售小賣', '客戶名稱', '小賣自取', '電話', '取貨方式',
          '訂單內容', '價格', '運費', '成本', '寄送方式', '店名',
          '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '獎金', '備註',
@@ -319,6 +324,7 @@ function openSaleForm(kind) {
     items: [newSaleItem()], groups: [newDistGroup()],
     cName: '', tel: '', note: '', fee: '', payStatus: SALES.PAY[0], payDate: '',
     collect: SALES.COLLECT[0],
+    noStock: '',                       // 網路單庫存處理：'' = 扣總倉；agent／order = 不扣
     miniName: (SALE.lists.mini[0] || {}).name || '', selfPick: false, pickup: SALES.PICKUP[0],
     sendWay: SALES.SEND_WAY[0], storeName: '',
     distName: (SALE.lists.dist[0] || {}).name || '', distTel: '',
@@ -354,14 +360,38 @@ function saleSrc() {
   if (f.kind === 'mini') return f.pickup === '寄送' ? CONFIG.H.warehouse : storeCol(SALES.PICK_STORE[f.pickup]);
   return CONFIG.H.warehouse;
 }
+/** 網路單勾了「廠商代出」或「待調貨」就不扣庫存 */
+function noStockTags() {
+  const f = SALE.form;
+  if (!f || f.kind !== 'online' || !f.noStock) return [];
+  const hit = SALES.NOSTOCK.find(o => o.key === f.noStock);
+  return hit ? [hit.tag] : [];
+}
+const skipStock = () => noStockTags().length > 0;
+
 /** 小賣可選的取貨方式：勾了「小賣自取」就沒有寄送 */
 function pickupOptions() {
   const f = SALE.form;
   return f && f.selfPick ? SALES.PICKUP.filter(p => p !== '寄送') : SALES.PICKUP;
 }
 function srcNote() {
-  const c = saleSrc();
-  return `<div class="hint-row">這張單的庫存會扣在 <b>${sEsc(srcLabel(c))}</b></div>`;
+  return `<div class="hint-row">這張單的庫存會扣在 <b>${sEsc(srcLabel(saleSrc()))}</b></div>`;
+}
+
+/** 網路單：庫存怎麼處理（三選一） */
+function noStockBlock() {
+  const f = SALE.form, cur = f.noStock || '';
+  const opt = (key, html) => `<label class="opt${cur === key ? ' on' : ''}">
+      <input type="radio" name="nsMode" value="${key}"${cur === key ? ' checked' : ''}>
+      <span>${html}</span></label>`;
+  return `<div class="field">
+    <label>庫存處理 <span class="req">*</span></label>
+    <div class="opt-list">
+      ${opt('', `這張單的庫存扣在 <b>${sEsc(srcLabel(saleSrc()))}</b>（一般情況）`)}
+      ${SALES.NOSTOCK.map(o => opt(o.key, sEsc(o.label))).join('')}
+    </div>
+    ${skipStock() ? `<div class="opt-warn">🚫 這張單<b>不扣庫存</b>（${sEsc(noStockTags().join('、'))}），只記錄銷售、營收與成本</div>` : ''}
+  </div>`;
 }
 
 function renderSaleBody() {
@@ -395,7 +425,7 @@ function renderSaleBody() {
     html += `<div class="field"><label>客戶名稱 <span class="req">*</span></label>
         <input type="text" id="fCName" value="${sEsc(f.cName)}"></div>
       <div class="field"><label>電話 <span class="req">*</span></label>${telIn('fTel', f.tel)}</div>`
-      + itemsBlock() + srcNote()
+      + itemsBlock() + noStockBlock()
       + `<div class="field"><label>寄送方式 <span class="req">*</span></label>
           <div class="chips big-chips" id="wayChips">
             ${SALES.SEND_WAY.map(w => `<button class="chip${w === f.sendWay ? ' on' : ''}" data-way="${w}">${w}</button>`).join('')}
@@ -499,6 +529,9 @@ function wireSaleBody() {
   document.querySelectorAll('#payChips .chip').forEach(c => c.onclick = () => { f.payStatus = c.dataset.pay; renderSaleBody(); });
   document.querySelectorAll('#pickChips .chip').forEach(c => c.onclick = () => { f.pickup = c.dataset.pick; renderSaleBody(); });
   document.querySelectorAll('#wayChips .chip').forEach(c => c.onclick = () => { f.sendWay = c.dataset.way; renderSaleBody(); });
+  document.querySelectorAll('input[name="nsMode"]').forEach(el => el.onchange = e => {
+    if (e.target.checked) { f.noStock = el.value; renderSaleBody(); }
+  });
   document.querySelectorAll('#collectChips .chip').forEach(c => c.onclick = () => {
     f.collect = c.dataset.collect;
     if (f.collect === SALES.COLLECT_PAID && !f.payDate) f.payDate = f.date || todayStr();
@@ -681,7 +714,8 @@ async function submitSale() {
   if (k === 'dist' && f.dSendWay === SALES.HOME_DELIVERY && !f.rAddr.trim()) return alert('選擇宅配時請填寫宅配地址');
 
   const src = saleSrc();
-  const short = items.filter(i => {
+  const noStock = skipStock(), tags = noStockTags();
+  const short = noStock ? [] : items.filter(i => {
     const p = S.products.byRow.get(i.row);
     return p && i.qty > (p.nums[src] || 0);
   });
@@ -689,7 +723,11 @@ async function submitSale() {
 
   const ok = await confirmModal({
     title: `確認這張${SALES.LABEL[k]}銷售單`,
-    lines: `<p style="font-size:14px;color:var(--ink-2)">送出後會直接從 <b>${sEsc(srcLabel(src))}</b> 扣掉庫存（總數減少）：</p>
+    lines: `${noStock
+        ? `<div class="alert-box">🚫 這張單<b>不扣庫存</b>（${sEsc(tags.join('、'))}）<br>
+             <span style="font-weight:400;font-size:13px">貨不是從我們倉庫出的，所以只記錄銷售、營收和成本，庫存數字完全不動。</span></div>
+           <p style="font-size:14px;color:var(--ink-2)">這張單的內容：</p>`
+        : `<p style="font-size:14px;color:var(--ink-2)">送出後會直接從 <b>${sEsc(srcLabel(src))}</b> 扣掉庫存（總數減少）：</p>`}
       <pre class="pre">${esc(items.map(i => `・${i.name} ${i.spec} ×${i.qty}　${money(i.price * i.qty)}`).join('\n'))}</pre>
       <p style="font-size:15px"><b>合計 ${money(total)}</b>${f.fee ? `　運費 ${money(f.fee)}` : ''}</p>
       ${k === 'dist' ? `<p style="font-size:14px;color:var(--ink-2)">寄送方式：<b>${sEsc(f.dSendWay)}</b><br>
@@ -716,7 +754,10 @@ async function submitSale() {
     set('id', id); set('訂單日期', f.date); set('建立時間', nowStr()); set('建立者', userName());
     set('負責業務', f.staff); set('備註', f.note.trim()); set('成本', cost); set('狀態', '有效');
     set('品項JSON', JSON.stringify(items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, price: i.price }))));
-    set('庫存異動JSON', JSON.stringify(items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, src }))));
+    // 不扣庫存的單：庫存異動JSON 留空陣列，之後作廢／退貨才不會把貨「還」回去
+    set('庫存異動JSON', noStock ? '[]'
+      : JSON.stringify(items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, src }))));
+    set('庫存狀態', noStock ? `不扣（${tags.join('、')}）` : '已扣庫存');
 
     if (k === 'shop') {
       set('門市', f.store); set('品項明細', itemsText(items)); set('金額', total);
@@ -758,11 +799,12 @@ async function submitSale() {
     }
 
     await appendRow(SALE.titles[k], v);
-    await applyPlan(items, 'sell');
+    if (!noStock) await applyPlan(items, 'sell');
     $('modalHost').innerHTML = ''; SALE.form = null;
     await loadSales(); await loadProducts();
     SALE.view = 'home'; renderSales();
-    toast(`${SALES.LABEL[k]}銷售單已送出，庫存已扣`, 'ok');
+    toast(noStock ? `${SALES.LABEL[k]}銷售單已送出（${tags.join('、')}，未扣庫存）`
+                  : `${SALES.LABEL[k]}銷售單已送出，庫存已扣`, 'ok');
   } catch (err) {
     alert('送出失敗：\n\n' + err.message);
   } finally {
@@ -1078,6 +1120,8 @@ function recvCard(r, kind) {
       <div><label>結帳狀態</label><select class="rSel" data-f="結帳狀態">${opts(SALES.PAY, r['結帳狀態'])}</select></div>
       <div><label>結帳日</label><input class="rInp" data-f="結帳日" type="date" value="${sEsc(r['結帳日'] || '')}"></div>
     </div>
+    ${String(r['庫存狀態'] || '').startsWith('不扣')
+      ? `<div class="note">🚫 這筆<b>${sEsc(r['庫存狀態'])}</b>，沒有動到庫存。貨到再出貨，作廢或退貨時庫存也不會變。</div>` : ''}
     ${returned ? `<div class="note">↩ 這筆已經<b>退貨入庫</b>，庫存已經加回去了。</div>` : ''}
     <div class="rec-foot">
       <span class="meta">${r['結帳確認者'] ? '結帳確認：' + sEsc(r['結帳確認者']) : ''}</span>
