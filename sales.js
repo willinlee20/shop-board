@@ -204,6 +204,8 @@ function renderSalesView() {
 function unsettled(kind) {
   return SALE.rows[kind].filter(r => String(r['封存']) !== '是');
 }
+/** 作廢／已退貨的單不算應收 */
+const liveOrder = r => String(r['狀態']) !== SALES.VOID && String(r['狀態']) !== SALES.RETURNED;
 
 function renderSales() {
   if (SALE.view !== 'home') return;
@@ -1023,8 +1025,12 @@ function renderRecv(kind) {
   SALE.view = 'recv-' + kind;
   SALE.recvWho = null;
   const name = { dist: '經銷', online: '網路', mini: '小賣' }[kind];
-  const rows = unsettled(kind).filter(r => String(r['結帳狀態']) !== '已結帳');
-  const done = unsettled(kind).filter(r => String(r['結帳狀態']) === '已結帳');
+
+  // 網路單同事要照這一頁撿貨包貨，所以直接把每一張單攤開，不分兩層
+  if (kind === 'online') return renderPickList(kind, name);
+
+  const rows = unsettled(kind).filter(r => String(r['結帳狀態']) !== '已結帳' && liveOrder(r));
+  const done = unsettled(kind).filter(r => String(r['結帳狀態']) === '已結帳' && liveOrder(r));
 
   const bag = new Map();
   rows.forEach(r => {
@@ -1059,6 +1065,79 @@ function renderRecv(kind) {
     b.onclick = () => renderRecvOne(kind, b.dataset.who));
 }
 
+/** 網路應收待結：一張單一張卡，直接在這裡撿貨、改狀態 */
+function renderPickList(kind, name) {
+  // 撿貨用的排序：還沒寄的排最前面，再來是寄出待取，作廢／退貨沉到最底
+  const rank = r => !liveOrder(r) ? 3
+    : String(r['寄件狀態']) === SALES.SHIP[0] ? 0
+      : SALES.DONE_PICK.includes(String(r['取貨狀態'])) ? 2 : 1;
+  const rows = unsettled(kind).slice().sort((a, b) =>
+    rank(a) - rank(b) || String(a['訂單日期']).localeCompare(String(b['訂單日期'])));
+  const open = rows.filter(r => String(r['結帳狀態']) !== '已結帳' && liveOrder(r));
+  const owe = open.reduce((s, r) => s + owedOf(r), 0);
+  const toShip = rows.filter(r => String(r['寄件狀態']) === SALES.SHIP[0] && liveOrder(r)).length;
+
+  $('salesView').innerHTML = backBar(name + '應收待結') +
+    (rows.length ? `
+      <div class="pick-sum">
+        <span>${rows.length} 張單${toShip ? `　·　<b class="warn">${toShip} 張待寄</b>` : ''}</span>
+        <span>未結 <b>${money(owe)}</b></span>
+      </div>
+      ${rows.map(r => pickCard(r, kind)).join('')}`
+      : `<div class="empty">目前沒有待處理的${name}訂單 🎉</div>`);
+  wireRecv(kind);
+}
+
+/** 撿貨卡：品項放大，狀態用按鈕點 */
+function pickCard(r, kind) {
+  const paid = String(r['結帳狀態']) === '已結帳';
+  const returned = String(r['狀態']) === SALES.RETURNED;
+  const voided = String(r['狀態']) === SALES.VOID;
+  const dead = returned || voided;
+  const canReturn = SALES.RETURN_PICK.includes(String(r['取貨狀態'])) && !dead;
+  const canClose = (paid && SALES.DONE_PICK.includes(String(r['取貨狀態']))) || dead;
+  const noStock = String(r['庫存狀態'] || '').startsWith('不扣');
+  const chips = (field, list, cur) => `<div class="pick-row">
+      <span class="pl">${field}</span>
+      <span class="pc">${list.map(o => `<button type="button" class="pchip${String(cur) === o ? ' on' : ''}"
+        data-chip="${field}" data-val="${sEsc(o)}">${sEsc(o)}</button>`).join('')}</span>
+    </div>`;
+
+  return `<div class="rec-card pick${dead ? ' is-void' : ''}" data-id="${sEsc(r.id)}" data-row="${r._row}">
+    <div class="pick-head">
+      <span class="nm">${sEsc(r['客戶名稱'] || '（未填）')}</span>
+      ${dead ? `<span class="tag tag-cancel">${sEsc(r['狀態'])}</span>` : ''}
+      <span class="pill-pay ${paid ? 'yes' : 'no'}">${sEsc(r['結帳狀態'] || '未結帳')}</span>
+      <span class="amt">${money(r['價格'])}${Number(r['運費']) ? `<i>+運${money(r['運費'])}</i>` : ''}</span>
+    </div>
+    <div class="pick-sub">${sEsc(r['訂單日期'])} · ${sEsc(r.id)} · ${sEsc(r['負責業務'] || '—')}${r['電話'] ? ' · ' + sEsc(r['電話']) : ''}</div>
+
+    <div class="pick-items">${sEsc(r['訂單內容'] || '（無品項）')}</div>
+    ${noStock ? `<div class="pick-flag">🚫 ${sEsc(r['庫存狀態'])}　貨還沒進來，不要撿貨</div>` : ''}
+    ${r['備註'] ? `<div class="pick-note">備註：${sEsc(r['備註'])}</div>` : ''}
+
+    <div class="pick-row">
+      <span class="pl">店名</span>
+      <span class="pc"><input class="rInp pick-in" data-f="店名" value="${sEsc(r['店名'] || '')}"
+        placeholder="${sEsc(r['寄送方式'] || '超商')}門市"></span>
+    </div>
+    ${chips('寄件狀態', SALES.SHIP, r['寄件狀態'])}
+    <div class="pick-row">
+      <span class="pl">寄件代碼</span>
+      <span class="pc"><input class="rInp pick-in" data-f="寄件代碼" value="${sEsc(r['寄件代碼'] || '')}" placeholder="寄出後回填"></span>
+    </div>
+    ${chips('取貨狀態', SALES.PICK, r['取貨狀態'])}
+    ${chips('結帳狀態', SALES.PAY, r['結帳狀態'])}
+
+    <div class="rec-foot">
+      <span class="meta">${r['結帳確認者'] ? '結帳：' + sEsc(r['結帳確認者']) : ''}</span>
+      <button class="btn btn-sm" data-recsave="1">儲存變更</button>
+      ${canReturn ? `<button class="btn btn-sm btn-danger" data-recreturn="1">↩ 退貨入庫</button>` : ''}
+      ${dead ? '' : `<button class="btn btn-sm btn-danger" data-recvoid="1">🗑 訂單作廢</button>`}
+      ${canClose ? `<button class="btn btn-sm btn-ok" data-recclose="1">✓ 完成並收起</button>` : ''}
+    </div></div>`;
+}
+
 /** 第二層：這個對象的每一張單，到這裡才能改狀態 */
 function renderRecvOne(kind, who) {
   SALE.view = 'recv-' + kind;
@@ -1066,7 +1145,7 @@ function renderRecvOne(kind, who) {
   const name = { dist: '經銷', online: '網路', mini: '小賣' }[kind];
   const rows = unsettled(kind).filter(r => recvWho(r, kind) === who)
     .sort((a, b) => String(a['訂單日期']).localeCompare(String(b['訂單日期'])));
-  const owe = rows.filter(r => String(r['結帳狀態']) !== '已結帳').reduce((s, r) => s + owedOf(r), 0);
+  const owe = rows.filter(r => String(r['結帳狀態']) !== '已結帳' && liveOrder(r)).reduce((s, r) => s + owedOf(r), 0);
 
   $('salesView').innerHTML = `<div class="sales-head">
       <button class="btn btn-sm" data-recback="1">← ${sEsc(name)}應收待結</button>
@@ -1127,6 +1206,7 @@ function recvCard(r, kind) {
       <span class="meta">${r['結帳確認者'] ? '結帳確認：' + sEsc(r['結帳確認者']) : ''}</span>
       <button class="btn btn-sm" data-recsave="1">儲存變更</button>
       ${canReturn ? `<button class="btn btn-sm btn-danger" data-recreturn="1">↩ 退貨入庫</button>` : ''}
+      ${returned || String(r['狀態']) === SALES.VOID ? '' : `<button class="btn btn-sm btn-danger" data-recvoid="1">🗑 訂單作廢</button>`}
       ${canClose ? `<button class="btn btn-sm btn-ok" data-recclose="1">✓ 完成並收起</button>` : ''}
     </div></div>`;
 }
@@ -1140,6 +1220,15 @@ function wireRecv(kind) {
       const ev = el.tagName === 'SELECT' ? 'onchange' : 'oninput';
       el[ev] = e => { patch[el.dataset.f] = e.target.value; };
     });
+    // 狀態按鈕：點了先記在 patch，按「儲存變更」才寫回
+    card.querySelectorAll('.pchip').forEach(b => b.onclick = () => {
+      const f = b.dataset.chip;
+      patch[f] = b.dataset.val;
+      card.querySelectorAll(`.pchip[data-chip="${f}"]`).forEach(x => x.classList.toggle('on', x === b));
+      const sv = card.querySelector('[data-recsave]');
+      if (sv) { sv.classList.add('btn-primary'); sv.textContent = '● 儲存變更'; }
+    });
+
     const save = card.querySelector('[data-recsave]');
     if (save) save.onclick = async () => {
       if (!Object.keys(patch).length) return toast('沒有變更');
@@ -1175,6 +1264,9 @@ function wireRecv(kind) {
       } catch (err) { alert('失敗：\n' + err.message); ret.disabled = false; ret.textContent = '↩ 退貨入庫'; }
     };
 
+    const vd = card.querySelector('[data-recvoid]');
+    if (vd) vd.onclick = () => voidSale(kind, r);
+
     const close = card.querySelector('[data-recclose]');
     if (close) close.onclick = async () => {
       const ok = await confirmModal({
@@ -1191,6 +1283,36 @@ function wireRecv(kind) {
       } catch (err) { alert('失敗：\n' + err.message); }
     };
   });
+}
+
+/** 訂單作廢：庫存原路退回，那筆標成「已作廢」留在試算表 */
+async function voidSale(kind, r) {
+  const plan = normPlan(parseJSON(r['庫存異動JSON'], []));
+  const who = kind === 'dist' ? r['經銷名稱'] : kind === 'mini' ? r['銷售小賣'] : r['客戶名稱'];
+  const ok = await confirmModal({
+    title: '確認作廢這張訂單？',
+    lines: `<p><b>${sEsc(who || '')}</b>　${money(r['價格'])}　${sEsc(r['訂單日期'])}　${sEsc(r.id)}</p>
+      <pre class="pre">${esc(r['訂單內容'] || '')}</pre>
+      ${plan.length
+        ? `<p style="font-size:14px;color:var(--ink-2)">當初扣掉的貨會<b>原路加回去</b>：</p>
+           <pre class="pre">${esc(planText(plan, 'unsell'))}</pre>`
+        : `<div class="alert-box">這張單<b>本來就沒扣庫存</b>${r['庫存狀態'] ? `（${sEsc(r['庫存狀態'])}）` : ''}，作廢只是把這筆營收作廢，庫存不會變。</div>`}
+      <div class="alert-box">作廢後這筆會標成「已作廢」<b>留在試算表裡</b>，不會消失，也不會再算進業績。
+        已經寄出去的單請改用「↩ 退貨入庫」。</div>`,
+    okText: '確定，作廢這張單',
+    danger: true
+  });
+  if (!ok) return;
+  try {
+    if (plan.length) await applyPlan(plan, 'unsell');
+    await patchSale(kind, r, {
+      狀態: SALES.VOID,
+      庫存狀態: plan.length ? '已退回庫存' : (r['庫存狀態'] || ''),
+      備註: (r['備註'] ? r['備註'] + ' / ' : '') + `${nowStr()} ${userName()} 訂單作廢${plan.length ? '，庫存已退回' : ''}`
+    });
+    await loadSales(); await loadProducts(); reRenderRecv(kind);
+    toast(plan.length ? '已作廢，庫存已退回' : '已作廢', 'ok');
+  } catch (err) { alert('作廢失敗：\n' + err.message); }
 }
 
 async function patchSale(kind, r, patch) {
