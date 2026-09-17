@@ -5,8 +5,8 @@
    ========================================================================= */
 
 /* ----------------------------- 版本 ------------------------------------ */
-const APP_VERSION = 'T2.0';          // 每次改版都會更新，畫面右上角看得到
-const APP_DATE = '2026-09-14（測試版）';
+const APP_VERSION = 'T2.1';          // 每次改版都會更新，畫面右上角看得到
+const APP_DATE = '2026-09-17（測試版）';
 
 /* ----------------------------- 設定區 -----------------------------------
    要改的東西都在這裡，下面的程式不用動。
@@ -325,7 +325,7 @@ async function bootstrap() {
 
   await loadProducts();
   await loadBoard();
-  if (window.initSales) await window.initSales(sheets);      // 銷售模組（測試版）
+  if (window.initSales) await window.initSales(sheets);      // 銷售紀錄模組
   $('loadingBox').classList.add('hidden');
   render();
   startPoll();
