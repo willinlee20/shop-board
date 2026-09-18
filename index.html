@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="3.1">
+<meta name="app-version" content="3.2">
 <title>西門龍門儀錶板</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -303,6 +303,9 @@ textarea{min-height:84px;resize:vertical}
 .day-sum .n{font-weight:700;font-size:16px}
 .day-sum .amt{font-weight:700;font-size:16px;font-variant-numeric:tabular-nums;color:var(--brand)}
 .day-sum .by{font-size:12px;color:var(--ink-3);margin-left:auto}
+/* 日結之後營業日跟日曆日不一樣時，把日期標出來 */
+.day-sum .dn{font-size:11.5px;color:var(--brand);background:var(--brand-soft);
+  border-radius:5px;padding:1px 7px;font-variant-numeric:tabular-nums}
 .day-list{background:#fff;border:1px solid var(--line);border-radius:0 0 var(--r) var(--r);
   box-shadow:var(--shadow);overflow:hidden}
 .day-row{display:grid;gap:2px 10px;padding:11px 16px;border-top:1px solid var(--line);
@@ -596,7 +599,7 @@ textarea{min-height:84px;resize:vertical}
 <div id="toastHost"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="app.js?v=3.1"></script>
-<script src="sales.js?v=3.1"></script>
+<script src="app.js?v=3.2"></script>
+<script src="sales.js?v=3.2"></script>
 </body>
 </html>

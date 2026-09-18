@@ -246,8 +246,8 @@ function renderSales() {
     <div class="pos-row">
       <button class="pos-btn" data-sv="shoplog"><span class="ico">🏬</span>來店銷售紀錄
         <span class="sub">看明細 · 修改 · 作廢</span></button>
-      <button class="pos-btn" data-sv="health"><span class="ico">🩺</span>品項健檢
-        <span class="sub">對一次庫存表的名稱</span></button>
+      <button class="pos-btn" data-sv="health"><span class="ico">🩺</span>資料庫品項健檢
+        <span class="sub">核對庫存表的產品名稱</span></button>
     </div>
     <div class="pos-row">
       <button class="pos-btn" data-sv="recv-dist"><span class="ico">🏪</span>經銷應收待結
@@ -257,17 +257,30 @@ function renderSales() {
       <button class="pos-btn" data-sv="recv-mini"><span class="ico">🛍️</span>小賣應收待結
         ${n('mini') ? `<span class="badge">${n('mini')}</span>` : '<span class="sub">目前沒有</span>'}</button>
     </div>
+    <div class="sec-title">今日營業</div>
+    ${todayPanel()}
     <div class="sec-title">今日銷售</div>
     ${todayBrief()}`;
+  wireDayPanel();
 }
 
 /** 今天（只有今天）開的每一張單，逐筆列出 */
+/**
+ * 這張單算不算「現在這一攤」。
+ * 來店單看它那間門市的營業日——按過「本日營業結束」之後就是隔天，
+ * 這樣開到深夜、結完帳繼續賣的單才不會從首頁消失。
+ * 網路／小賣／經銷不受日結影響，還是看日曆上的今天。
+ */
+function inCurrentDay(r) {
+  const d = String(r['訂單日期'] || '');
+  return r._kind === 'shop' ? d === openDay(r['門市']) : d === todayStr();
+}
+
 function todayBrief() {
-  const t = todayStr();
   const all = [];
   // 收起（封存）過的單就不要再出現在今日銷售，跟各自的清單一致
   for (const k of Object.keys(SH_HEAD)) {
-    unsettled(k).filter(r => String(r['訂單日期']) === t).forEach(r => all.push(r));
+    unsettled(k).filter(inCurrentDay).forEach(r => all.push(r));
   }
   if (!all.length) return `<div class="empty">今天還沒有銷售紀錄</div>`;
 
@@ -285,8 +298,12 @@ function todayBrief() {
       : r._kind === 'mini' ? `${r['銷售小賣']}${r['客戶名稱'] ? '　' + r['客戶名稱'] : '（自取）'}`
         : r['客戶名稱'];
 
+  const days = [...new Set(all.map(r => String(r['訂單日期'])))].sort();
+  const dayNote = (days.length && !(days.length === 1 && days[0] === todayStr()))
+    ? `<span class="dn">${days.map(sEsc).join(' · ')}</span>` : '';
+
   return `<div class="day-sum">
-      <span class="n">${live.length} 筆</span>
+      <span class="n">${live.length} 筆</span>${dayNote}
       <span class="amt">${money(sum)}</span>
       <span class="by">${Object.keys(by).map(k => `${SALES.LABEL[k]} ${by[k]}`).join('　·　') || '—'}</span>
     </div>
@@ -1010,9 +1027,14 @@ function dayDivider(day) {
     <span class="dd-sum">${parts}</span></div>`;
 }
 
-function wireShopLog() {
+/** 門市卡的日結按鈕：首頁和來店銷售紀錄共用 */
+function wireDayPanel() {
   document.querySelectorAll('[data-close]').forEach(b => b.onclick = () => closeDay(b.dataset.close));
   document.querySelectorAll('[data-reopen]').forEach(b => b.onclick = () => reopenDay(b.dataset.reopen));
+}
+
+function wireShopLog() {
+  wireDayPanel();
   document.querySelectorAll('.rec-card[data-id]').forEach(card => {
     const r = SALE.rows.shop.find(x => x.id === card.dataset.id);
     if (!r) return;
@@ -1791,7 +1813,7 @@ function renderHealth() {
          `<div class="day-row"><span class="nm">${sEsc(k)}</span>
             <span class="mn">${n} 張單</span></div>`).join('')}</div>` : '';
 
-  $('salesView').innerHTML = backBar('品項健檢') + `
+  $('salesView').innerHTML = backBar('資料庫品項健檢') + `
     <div class="perf">
       <div class="perf-top">
         <span class="lb">檢查了 ${orders.length} 張還沒結案的單<i>留言板待處理 ＋ 銷售未收起</i></span>
@@ -1887,6 +1909,13 @@ function todayPanel() {
   }).join('')}</div>`;
 }
 
+/** 日結按鈕可能在首頁、也可能在來店銷售紀錄，按完要重畫當下這一頁 */
+function redrawAfterClose() {
+  if (SALE.view === 'shoplog') return renderShopLog();
+  SALE.view = 'home';
+  return renderSales();
+}
+
 async function closeDay(store) {
   const day = openDay(store), d = dayStats(store, day);
   const ok = await confirmModal({
@@ -1911,7 +1940,7 @@ async function closeDay(store) {
     set('筆數', d.n); set('金額', d.amount); set('成本', d.cost);
     set('現金', d.cash); set('匯款', d.bank);
     await appendRow(SALES.CLOSE_SHEET, v);
-    await loadSales(); renderShopLog();
+    await loadSales(); redrawAfterClose();
     toast(`${store} ${day} 已結束營業`, 'ok');
   } catch (err) { alert('失敗：\n' + err.message); }
 }
@@ -1934,7 +1963,7 @@ async function reopenDay(store) {
       values: [[`${nowStr()} ${userName()} 取消日結`]] }]);
     const idCol = colLetter(CLOSE_HEAD.indexOf('id'));
     await writeRanges([{ range: `'${SALES.CLOSE_SHEET}'!${idCol}${rec._row}`, values: [['']] }]);
-    await loadSales(); renderShopLog();
+    await loadSales(); redrawAfterClose();
     toast('已取消日結', 'ok');
   } catch (err) { alert('失敗：\n' + err.message); }
 }
