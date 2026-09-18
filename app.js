@@ -5,8 +5,8 @@
    ========================================================================= */
 
 /* ----------------------------- 版本 ------------------------------------ */
-const APP_VERSION = '2.4';          // 每次改版都會更新，畫面右上角看得到
-const APP_DATE = '2026-09-17';
+const APP_VERSION = '2.6';          // 每次改版都會更新，畫面右上角看得到
+const APP_DATE = '2026-09-18';
 
 /* ----------------------------- 設定區 -----------------------------------
    要改的東西都在這裡，下面的程式不用動。
@@ -469,15 +469,24 @@ function normPlan(plan) {
 }
 
 /** 品項有可能因為庫存表插入列而位移，優先用「產品名稱＋規格」重新定位 */
-function resolveRow(p) {
-  if (p.name) {
-    const list = S.products.byName.get(p.name);
+/**
+ * 從存下來的品項紀錄找回產品。
+ * 一定要「產品名稱＋規格」優先、列號只當備援——庫存表插過列之後，
+ * 舊紀錄裡的列號會指到別的產品，直接用列號會抓成完全不同的東西。
+ */
+function findProduct(i) {
+  if (i && i.name) {
+    const list = S.products.byName.get(i.name);
     if (list) {
-      const hit = list.find(x => String(x.spec || '') === String(p.spec || ''));
-      if (hit) return hit.sheetRow;
+      const hit = list.find(x => String(x.spec || '') === String(i.spec || ''));
+      if (hit) return hit;
     }
   }
-  return p.row;
+  return (i && i.row) ? (S.products.byRow.get(i.row) || null) : null;
+}
+function resolveRow(p) {
+  const hit = findProduct(p);
+  return hit ? hit.sheetRow : p.row;
 }
 
 /**
@@ -1015,15 +1024,20 @@ function openForm(editId) {
       taskText: r['類型'] === TYPES.TASK ? (r['備註'] || '') : '',
       routines: String(r['例行工作項目'] || '').split('\n').filter(Boolean),
       items: parseJSON(r['品項JSON'], []).map(i => {
-        const p = S.products.byRow.get(i.row);
-        const byName = !p && i.name ? (S.products.byName.get(i.name) || [])
-          .find(x => String(x.spec || '') === String(i.spec || '')) : null;
-        const hit = p || byName;
-        return { name: hit ? hit.name : (i.name || ''), row: hit ? hit.sheetRow : i.row,
+        const hit = findProduct(i);
+        return { name: hit ? hit.name : (i.name || ''), spec: hit ? hit.spec : (i.spec || ''),
+                 row: hit ? hit.sheetRow : i.row,
                  qty: i.qty, price: i.price || 0, src: i.src || i.storeCol || DEFAULT_SRC(),
-                 cat: hit ? hit.cat : null };
+                 cat: hit ? hit.cat : null, missing: !hit };
       })
     };
+    const lost = FORM.items.filter(x => x.missing);
+    if (lost.length) {
+      FORM = null;
+      return alert('這筆留言有品項在庫存表找不到，為了避免庫存算錯，先不開放修改：\n\n'
+        + lost.map(x => `・${x.name} ${x.spec}`).join('\n')
+        + '\n\n可能是產品被改名或刪除了。請先確認庫存表，或取消這張單重開一張。');
+    }
     if (!FORM.items.length) FORM.items = [newItem()];
     FORM.groups = groupsFromItems(FORM.items);
   } else {
@@ -1190,8 +1204,7 @@ function stockText(p) {
 function groupsFromItems(items) {
   const map = new Map(), out = [];
   for (const it of items) {
-    if (!it.row) continue;
-    const p = S.products.byRow.get(it.row);
+    const p = findProduct(it);
     if (!p) continue;
     const src = it.src || DEFAULT_SRC();
     const k = p.name + '|' + src;
@@ -1199,7 +1212,7 @@ function groupsFromItems(items) {
       const g = { cat: p.cat, name: p.name, src, qty: {} };
       map.set(k, g); out.push(g);
     }
-    map.get(k).qty[it.row] = (map.get(k).qty[it.row] || 0) + it.qty;
+    map.get(k).qty[p.sheetRow] = (map.get(k).qty[p.sheetRow] || 0) + it.qty;
   }
   return out.length ? out : [newGroup()];
 }

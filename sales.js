@@ -45,7 +45,7 @@ const SALES = {
 const SH_HEAD = {
   shop: ['id', '訂單日期', '建立時間', '建立者', '門市', '負責業務', '品項明細', '金額', '成本',
          '備註', '品項JSON', '庫存異動JSON', '庫存狀態', '關聯單號', '狀態',
-         '最後修改時間', '最後修改者', '修改紀錄'],
+         '最後修改時間', '最後修改者', '修改紀錄', '封存'],
   online: ['id', '訂單日期', '建立時間', '建立者', '客戶名稱', '電話', '訂單內容', '價格', '運費', '成本',
            '收款方式', '寄送方式', '店名',
            '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '備註',
@@ -161,7 +161,7 @@ function staffNames() { return SALE.lists.staff.map(x => x.name); }
 /** 一張單的成本合計 */
 function costOf(items) {
   return items.reduce((sum, it) => {
-    const p = S.products.byRow.get(it.row);
+    const p = findProduct(it) || S.products.byRow.get(it.row);
     const c = p ? (p.nums['成本'] || 0) : 0;
     return sum + c * it.qty;
   }, 0);
@@ -841,17 +841,55 @@ window.createShopSaleFromOrder = async function (r) {
 
 /* ----------------------------- 來店銷售紀錄 ---------------------------- */
 const shopVoided = r => String(r['狀態']) === SALES.VOID;
+const shopArchived = r => String(r['封存']) === '是';
 const shopLinked = r => !!String(r['關聯單號'] || '').trim();
 
 function renderShopLog() {
   SALE.view = 'shoplog';
-  const rows = SALE.rows.shop.slice().reverse().slice(0, 80);
-  const live = rows.filter(r => !shopVoided(r));
-  const sum = live.reduce((s, r) => s + (Number(r['金額']) || 0), 0);
-  $('salesView').innerHTML = backBar('來店銷售紀錄') +
-    `<div class="hint-row" style="margin:0 0 10px">最近 ${rows.length} 筆　·　有效 ${live.length} 筆　·　合計 ${money(sum)}</div>` +
-    (rows.length ? rows.map(shopCard).join('') : `<div class="empty">還沒有來店銷售紀錄</div>`);
+  const rows = SALE.rows.shop.filter(r => !shopArchived(r)).reverse().slice(0, 80);
+  const hidden = SALE.rows.shop.filter(shopArchived).length;
+  $('salesView').innerHTML = backBar('來店銷售紀錄') + shopPerf() +
+    (rows.length ? rows.map(shopCard).join('')
+      : `<div class="empty">沒有待顯示的來店銷售紀錄</div>`) +
+    (hidden ? `<div class="hint-row" style="margin-top:12px">另有 ${hidden} 筆已收起（試算表裡還在，「查詢」查得到）</div>` : '');
   wireShopLog();
+}
+
+/** 近七天的來店業績（不含作廢） */
+function shopPerf() {
+  const DAYS = 7;
+  const from = new Date(); from.setDate(from.getDate() - (DAYS - 1));
+  const p = x => String(x).padStart(2, '0');
+  const fromStr = `${from.getFullYear()}-${p(from.getMonth() + 1)}-${p(from.getDate())}`;
+  const today = todayStr();
+  const inRange = SALE.rows.shop.filter(r => {
+    const d = String(r['訂單日期'] || '');
+    return d >= fromStr && d <= today && !shopVoided(r);
+  });
+  const sum = inRange.reduce((s, r) => s + (Number(r['金額']) || 0), 0);
+  const cost = inRange.reduce((s, r) => s + (Number(r['成本']) || 0), 0);
+  const group = key => {
+    const m = new Map();
+    inRange.forEach(r => {
+      const k = String(r[key] || '—').trim() || '—';
+      m.set(k, (m.get(k) || 0) + (Number(r['金額']) || 0));
+    });
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  };
+  const line = (label, arr) => arr.length
+    ? `<div class="perf-row"><span class="pk">${label}</span><span class="pv">${
+        arr.map(([k, v]) => `<i><b>${sEsc(k)}</b> ${money(v)}</i>`).join('')}</span></div>` : '';
+
+  return `<div class="perf">
+    <div class="perf-top">
+      <span class="lb">近 7 天業績<i>${sEsc(fromStr.slice(5))} – ${sEsc(today.slice(5))}</i></span>
+      <span class="n">${inRange.length} 筆</span>
+      <span class="amt">${money(sum)}</span>
+    </div>
+    ${line('門市', group('門市'))}
+    ${line('業務', group('負責業務'))}
+    ${sum ? `<div class="perf-row"><span class="pk">毛利</span><span class="pv"><i>${money(sum - cost)}　<b style="font-weight:400;color:var(--ink-3)">成本 ${money(cost)}</b></i></span></div>` : ''}
+  </div>`;
 }
 
 function shopCard(r) {
@@ -874,10 +912,12 @@ function shopCard(r) {
     ${r['最後修改時間'] ? `<div class="rec-meta">✎ 最後修改：${sEsc(r['最後修改者'])} ${sEsc(r['最後修改時間'])}</div>` : ''}
     ${String(r['修改紀錄'] || '').trim() ? `<details class="chg"><summary>修改紀錄</summary>
       ${String(r['修改紀錄']).split('\n').filter(Boolean).map(x => `<div>${sEsc(x)}</div>`).join('')}</details>` : ''}
-    ${voided ? '' : `<div class="rec-foot"><span class="meta"></span>
-      <button class="btn btn-sm" data-shopedit="1">✎ 修改</button>
-      <button class="btn btn-sm btn-danger" data-shopvoid="1">🗑 作廢（退回庫存）</button>
-    </div>`}</div>`;
+    <div class="rec-foot"><span class="meta"></span>
+      ${voided
+        ? `<button class="btn btn-sm btn-ok" data-shoparchive="1">✓ 收起</button>`
+        : `<button class="btn btn-sm" data-shopedit="1">✎ 修改</button>
+           <button class="btn btn-sm btn-danger" data-shopvoid="1">🗑 作廢（退回庫存）</button>`}
+    </div></div>`;
 }
 
 function wireShopLog() {
@@ -888,6 +928,8 @@ function wireShopLog() {
     if (ed) ed.onclick = () => openShopEdit(r);
     const vd = card.querySelector('[data-shopvoid]');
     if (vd) vd.onclick = () => voidShopSale(r);
+    const ar = card.querySelector('[data-shoparchive]');
+    if (ar) ar.onclick = () => archiveShopSale(r);
   });
 }
 
@@ -916,10 +958,23 @@ function openSaleEdit(kind, r) {
   f.staff = r['負責業務'] || '';
   f.note = r['備註'] || '';
   f.fee = r['運費'] === '' || r['運費'] === undefined ? '' : String(r['運費']);
-  const list = items.map(i => ({
-    cat: (S.products.byRow.get(i.row) || {}).cat || null,
-    name: i.name, row: i.row, qty: Number(i.qty) || 1, price: Number(i.price) || 0
-  }));
+  // 同樣要用「名稱＋規格」找回產品，不能信單子上記的列號
+  const lost = [];
+  const list = items.map(i => {
+    const hit = findProduct(i);
+    if (!hit) lost.push(i);
+    return {
+      cat: hit ? hit.cat : null, name: hit ? hit.name : i.name,
+      spec: hit ? hit.spec : i.spec, row: hit ? hit.sheetRow : i.row,
+      qty: Number(i.qty) || 1, price: Number(i.price) || 0
+    };
+  });
+  if (lost.length) {
+    $('modalHost').innerHTML = ''; SALE.form = null;
+    return alert('這張單有品項在庫存表找不到，為了避免庫存算錯，先不開放修改：\n\n'
+      + lost.map(x => `・${x.name} ${x.spec}`).join('\n')
+      + '\n\n可能是產品被改名或刪除了。請先確認庫存表。');
+  }
   f.items = list.length ? list : [newSaleItem()];
   f.groups = groupsFromSaleItems(list);
 
@@ -1112,6 +1167,23 @@ async function submitShopEdit() {
     S.busy = false;
     if ($('submitSale')) { btn.disabled = false; btn.textContent = '儲存修改'; }
   }
+}
+
+/** 把作廢的來店單收起來，不再顯示在列表（試算表資料保留） */
+async function archiveShopSale(r) {
+  const ok = await confirmModal({
+    title: '把這筆收起來？',
+    lines: `<p><b>${sEsc(r['門市'])}</b>　${money(r['金額'])}　${sEsc(r['訂單日期'])}　${sEsc(r.id)}</p>
+      <div class="alert-box">收起後<b>不再顯示在來店銷售紀錄</b>，但試算表的資料完整保留，「查詢」還是查得到。
+        庫存在作廢時就已經退回了，收起不會再動庫存。</div>`,
+    okText: '確定，收起'
+  });
+  if (!ok) return;
+  try {
+    await patchSale('shop', r, { 封存: '是' });
+    await loadSales(); renderShopLog();
+    toast('已收起', 'ok');
+  } catch (err) { alert('失敗：\n' + err.message); }
 }
 
 /* ---- 作廢來店單 ---- */
