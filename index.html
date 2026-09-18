@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2.9">
+<meta name="app-version" content="3.0">
 <title>西門龍門儀錶板</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -340,6 +340,12 @@ textarea{min-height:84px;resize:vertical}
 .perf-row .pv i{font-style:normal;font-size:12.5px;color:var(--ink-2);
   font-variant-numeric:tabular-nums;white-space:nowrap}
 .perf-row .pv i b{font-weight:600;color:var(--ink);margin-right:3px}
+.perf-row .pv i.wrap{white-space:normal;line-height:1.6}
+
+/* 品項健檢的卡片：有問題要跳出來，不是變灰 */
+.rec-card.chk-bad{border-left:4px solid var(--bad);background:#fffbfb}
+.rec-card.chk-warn{border-left:4px solid var(--warn);background:#fffdf7}
+.rec-card.chk-bad .rec-items,.rec-card.chk-warn .rec-items{font-weight:500}
 
 /* 應收待結：第一層彙整卡 */
 .sum-card{display:grid;grid-template-columns:1fr auto;gap:3px 12px;width:100%;text-align:left;
@@ -550,7 +556,7 @@ textarea{min-height:84px;resize:vertical}
 <div id="toastHost"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="app.js?v=2.9"></script>
-<script src="sales.js?v=2.9"></script>
+<script src="app.js?v=3.0"></script>
+<script src="sales.js?v=3.0"></script>
 </body>
 </html>

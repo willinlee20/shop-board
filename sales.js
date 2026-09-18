@@ -198,6 +198,7 @@ function renderSalesView() {
   if (v === 'new') return renderNewPicker();
   if (v === 'query') return renderQuery();
   if (v === 'shoplog') return renderShopLog();
+  if (v === 'health') return renderHealth();
   if (v.startsWith('recv-')) return reRenderRecv(v.slice(5));
   SALE.view = 'home';
   return renderSales();
@@ -223,6 +224,8 @@ function renderSales() {
     <div class="pos-row">
       <button class="pos-btn" data-sv="shoplog"><span class="ico">🏬</span>來店銷售紀錄
         <span class="sub">看明細 · 修改 · 作廢</span></button>
+      <button class="pos-btn" data-sv="health"><span class="ico">🩺</span>品項健檢
+        <span class="sub">對一次庫存表的名稱</span></button>
     </div>
     <div class="pos-row">
       <button class="pos-btn" data-sv="recv-dist"><span class="ico">🏪</span>經銷應收待結
@@ -291,6 +294,7 @@ document.addEventListener('click', e => {
   if (v === 'home') { SALE.view = 'home'; return renderSales(); }
   if (v === 'query') return renderQuery();
   if (v === 'shoplog') return renderShopLog();
+  if (v === 'health') return renderHealth();
   if (v.startsWith('recv-')) return renderRecv(v.slice(5));
 });
 
@@ -1639,4 +1643,98 @@ function runQuery() {
         <div class="rec-items">${sEsc(r['品項明細'] || r['訂單內容'] || '')}</div>
       </div>`).join('')
       : `<div class="empty">沒有符合的訂單</div>`);
+}
+
+/* ========================= 品項健檢 =====================================
+   把「還沒結案」的單子一張一張拿去跟現在的庫存表對，看名稱還認不認得出來。
+   產品在庫存表被改名或刪掉之後，舊單子上記的名稱就會對不上；
+   v2.9 之後對不上的單會被擋住不給改，所以要有地方一次看完是哪幾張。     */
+
+/** 這個品項現在對得上嗎？exact＝一字不差｜fuzzy＝只差空白或大小寫｜none＝找不到 */
+function matchKind(i) {
+  if (!i) return 'none';
+  if (!i.name) return (i.row && S.products.byRow.get(i.row)) ? 'row' : 'none';
+  const list = S.products.byName.get(i.name);
+  if (list && list.some(x => String(x.spec || '') === String(i.spec || ''))) return 'exact';
+  return findProduct(i) ? 'fuzzy' : 'none';
+}
+
+/** 要健檢的單：留言板還在待處理的，加上銷售四種還沒收起、還有效的 */
+function healthTargets() {
+  const out = [];
+  (S.board || []).forEach(r => {
+    if (String(r['狀態']) !== STATUS.OPEN) return;
+    const items = parseJSON(r['品項JSON'], []);
+    if (items.length) out.push({ kind: r['類型'], id: r.id, who: r['客戶名稱'] || r['門市'] || '',
+                                 date: r['取貨日期'] || '', items });
+  });
+  for (const k of Object.keys(SH_HEAD)) {
+    unsettled(k).forEach(r => {
+      if (!liveOrder(r)) return;
+      const items = parseJSON(r['品項JSON'], []);
+      if (items.length) out.push({ kind: SALES.LABEL[k] + '銷售', id: r.id,
+        who: r['客戶名稱'] || r['經銷名稱'] || r['銷售小賣'] || r['門市'] || '',
+        date: r['訂單日期'] || '', items });
+    });
+  }
+  return out;
+}
+
+function renderHealth() {
+  SALE.view = 'health';
+  const orders = healthTargets();
+  const bad = [], warn = [];
+  const badItems = new Map(), warnItems = new Map();   // 「名稱 規格」→ 有幾張單用到
+
+  orders.forEach(o => {
+    const g = o.items.filter(i => matchKind(i) === 'none');
+    const f = o.items.filter(i => matchKind(i) === 'fuzzy');
+    if (g.length) { bad.push({ ...o, hit: g }); g.forEach(i => {
+      const k = `${i.name || '（沒有名稱）'} ${i.spec || ''}`.trim();
+      badItems.set(k, (badItems.get(k) || 0) + 1); }); }
+    else if (f.length) { warn.push({ ...o, hit: f }); f.forEach(i => {
+      const k = `${i.name} ${i.spec || ''}`.trim();
+      warnItems.set(k, (warnItems.get(k) || 0) + 1); }); }
+  });
+
+  const card = (o, cls) => `<div class="rec-card${cls}">
+    <div class="rec-top">
+      <span class="tag tag-order">${sEsc(o.kind)}</span>
+      <span class="who2">${sEsc(o.who || '—')}</span>
+      <span class="amt" style="font-size:13px;font-weight:400;color:var(--ink-3)">${sEsc(o.date)}</span>
+    </div>
+    <div class="rec-meta">${sEsc(o.id)}</div>
+    <div class="rec-items">${o.hit.map(i =>
+      `${sEsc(i.name || '（沒有名稱）')} ${sEsc(i.spec || '')} ×${i.qty}`).join('<br>')}</div>
+  </div>`;
+
+  const tally = (m, label) => m.size
+    ? `<div class="sec-title">${label}</div>
+       <div class="day-list">${[...m.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) =>
+         `<div class="day-row"><span class="nm">${sEsc(k)}</span>
+            <span class="mn">${n} 張單</span></div>`).join('')}</div>` : '';
+
+  $('salesView').innerHTML = backBar('品項健檢') + `
+    <div class="perf">
+      <div class="perf-top">
+        <span class="lb">檢查了 ${orders.length} 張還沒結案的單<i>留言板待處理 ＋ 銷售未收起</i></span>
+        <span class="amt" style="color:${bad.length ? 'var(--bad)' : 'var(--ok)'}">${
+          bad.length ? bad.length + ' 張有問題' : '全部正常'}</span>
+      </div>
+      ${warn.length ? `<div class="perf-row"><span class="pk">提醒</span>
+        <span class="pv"><i class="wrap">${warn.length} 張的名稱只差空白或大小寫，系統會自動對回來，但建議把庫存表的寫法統一</i></span></div>` : ''}
+    </div>` +
+    (bad.length ? `<div class="sec-title">❌ 找不到品項（這幾張現在不能改單）</div>
+        <div class="hint-row" style="margin-bottom:10px">產品在庫存表被改名或刪掉了。
+          把庫存表的「產品名稱／產品規格」改回下面這些字，這幾張單就會恢復正常；
+          或是在單子上把該品項刪掉、重新選一次。</div>
+        ${bad.map(o => card(o, ' chk-bad')).join('')}
+        ${tally(badItems, '要在庫存表補回來的名稱')}` : '')
+    +
+    (warn.length ? `<div class="sec-title">⚠️ 名稱只差空白／大小寫（還是能用）</div>
+        ${warn.map(o => card(o, ' chk-warn')).join('')}
+        ${tally(warnItems, '建議統一寫法的名稱')}` : '')
+    +
+    (!bad.length && !warn.length
+      ? `<div class="empty">所有還沒結案的單，品項都跟庫存表對得起來 🎉</div>` : '');
 }
