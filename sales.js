@@ -21,6 +21,7 @@ const SALES = {
   // 網路單：前台只選收款方式，系統自己推結帳狀態
   COLLECT: ['已收貨款', '貨到付款'],
   COLLECT_PAID: '已收貨款',              // 選這個 → 結帳狀態直接帶「已結帳」
+  COLLECT_COD:  '貨到付款',              // 網路單的預設（大部分是貨到付款）
   VOID: '已作廢',
   PAYWAY: ['現金', '匯款'],          // 來店單的收款方式，出納對帳用
   CLOSE_SHEET: 'DayClose日結',       // 每間門市每天「本日營業結束」的紀錄
@@ -374,7 +375,7 @@ function openSaleForm(kind) {
     store: store0,
     items: [newSaleItem()], groups: [newDistGroup()],
     cName: '', tel: '', note: '', fee: '', payStatus: SALES.PAY[0], payDate: '',
-    collect: SALES.COLLECT[0],
+    collect: SALES.COLLECT_COD,        // 網路單預設貨到付款
     payWay: SALES.PAYWAY[0],           // 來店單：現金／匯款
     noStock: '',                       // 網路單庫存處理：'' = 扣總倉；agent／order = 不扣
     miniName: (SALE.lists.mini[0] || {}).name || '', selfPick: false, pickup: SALES.PICKUP[0],
@@ -1102,7 +1103,7 @@ function openSaleEdit(kind, r) {
     f.sendWay = SALES.SEND_WAY.includes(r['寄送方式']) ? r['寄送方式'] : SALES.SEND_WAY[0];
     f.storeName = r['店名'] || '';
     f.collect = SALES.COLLECT.includes(r['收款方式']) ? r['收款方式']
-      : (String(r['結帳狀態']) === '已結帳' ? SALES.COLLECT_PAID : SALES.COLLECT[1]);
+      : (String(r['結帳狀態']) === '已結帳' ? SALES.COLLECT_PAID : SALES.COLLECT_COD);
     f.payDate = r['結帳日'] || '';
     const tag = String(r['庫存狀態'] || '');
     const hit = SALES.NOSTOCK.find(o => tag.includes(o.tag));
