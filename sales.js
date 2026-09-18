@@ -172,8 +172,11 @@ const itemsTotal = items => items.reduce((s, i) => s + (i.qty * (i.price || 0)),
 /** 把品項補上 name/spec（從庫存表查） */
 function fillItems(list, src) {
   return list.map(i => {
-    const p = S.products.byRow.get(i.row);
-    return { row: i.row, name: p ? p.name : '', spec: p ? p.spec : '', qty: i.qty, price: i.price || 0, src };
+    // 品項的身分是「名稱＋規格」；列號會因為庫存表插入／刪除列而跑掉，不能拿來認產品
+    const p = findProduct(i) || (i.name ? null : S.products.byRow.get(i.row));
+    return p
+      ? { row: p.sheetRow, name: p.name, spec: p.spec, qty: i.qty, price: i.price || 0, src }
+      : { row: i.row, name: i.name || '', spec: i.spec || '', qty: i.qty, price: i.price || 0, src, missing: true };
   });
 }
 
@@ -585,7 +588,7 @@ function renderSaleItems() {
       </div>
       ${p ? `<div class="stockline${it.qty > have ? ' short' : ''}">${sEsc(srcLabel(saleSrc()))}現有 <b>${have}</b>${it.qty > have ? `　⚠ 不足 ${it.qty - have}` : ''}　·　售價 ${money(p.price)}</div>` : ''}
       <div class="r2">
-        <div class="f"><label>數量</label>${numIn('itemQty', it.qty, '1', 'min="1"')}</div>
+        <div class="f"><label>數量</label>${qtyIn('itemQty', it.qty, '1', 1)}</div>
         <div class="f"><label>單價</label>${numIn('itemPrice', it.price, '0')}</div>
         <div class="f" style="max-width:110px"><label>小計</label>
           <input type="text" value="${money(it.qty * it.price)}" readonly style="background:#f1f5f9"></div>
@@ -602,15 +605,15 @@ function renderSaleItems() {
       renderSaleItems();
     });
     row.querySelector('.itemName').onchange = e => {
-      it.name = e.target.value; it.row = null;
+      it.name = e.target.value; it.row = null; it.spec = '';
       const vs = S.products.byName.get(it.name) || [];
-      if (vs.length === 1) { it.row = vs[0].sheetRow; it.price = vs[0].price; }
+      if (vs.length === 1) { it.row = vs[0].sheetRow; it.price = vs[0].price; it.spec = vs[0].spec; }
       renderSaleItems(); saleTotal();
     };
     row.querySelector('.itemSpec').onchange = e => {
       it.row = +e.target.value || null;
       const p = it.row ? S.products.byRow.get(it.row) : null;
-      if (p) { it.price = p.price; it.cat = p.cat; }
+      if (p) { it.price = p.price; it.cat = p.cat; it.name = p.name; it.spec = p.spec; }
       renderSaleItems(); saleTotal();
     };
     row.querySelector('.itemQty').oninput = e => { it.qty = Math.max(1, +e.target.value || 1); saleTotal(); };
@@ -632,13 +635,13 @@ function renderDistGroups() {
         ${P.cats.map(c => `<button class="cat-tab${c === cat ? ' on' : ''}" data-cat="${sEsc(c)}">${sEsc(c)}</button>`).join('')}
         <button class="cat-tab${cat === ALL_CAT ? ' on' : ''}" data-cat="${ALL_CAT}">全部</button></div>` : '';
     const specs = variants.length ? `<div class="spec-list">
-        <div class="spec-head"><span>規格</span><span class="sq">總倉</span><span class="qt">數量</span><span class="qt">單價</span></div>
+        <div class="spec-head"><span>規格</span><span class="sq">總倉</span><span class="qt">數量</span><span class="qt pr">單價</span></div>
         ${variants.map(v => {
           const q = g.qty[v.sheetRow] || '', pr = g.price[v.sheetRow] ?? '';
           return `<div class="spec-row${q ? ' has' : ''}" data-row="${v.sheetRow}">
             <span class="nm">${sEsc(v.spec || '（無規格）')}</span>
             <span class="sq">${v.nums[CONFIG.H.warehouse] || 0}</span>
-            ${numIn('gq', q, '0', `data-row="${v.sheetRow}"`)}
+            ${qtyIn('gq', q, '0', 0, `data-row="${v.sheetRow}"`)}
             ${numIn('gp', pr, String(v.price || 0), `data-row="${v.sheetRow}"`)}
           </div>`;
         }).join('')}</div>`
@@ -692,11 +695,16 @@ function saleItemList() {
     const out = [];
     f.groups.forEach(g => Object.keys(g.qty).forEach(r => {
       const n = Number(g.qty[r]) || 0;
-      if (n > 0) out.push({ row: +r, qty: n, price: Number(g.price[r]) || 0 });
+      if (n > 0) {
+        const p = S.products.byRow.get(+r);
+        out.push({ row: +r, name: p ? p.name : (g.name || ''), spec: p ? p.spec : '',
+                   qty: n, price: Number(g.price[r]) || 0 });
+      }
     }));
     return fillItems(out, src);
   }
-  return fillItems(f.items.filter(i => i.row).map(i => ({ row: i.row, qty: i.qty, price: i.price })), src);
+  return fillItems(f.items.filter(i => i.row)
+    .map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, price: i.price })), src);
 }
 function saleTotal() {
   const el = $('saleTotal');
@@ -715,6 +723,10 @@ async function submitSale() {
   if (k === 'online' && !f.tel.trim()) return alert('請填寫電話');
   if (k === 'mini' && !f.selfPick && !f.cName.trim()) return alert('請填寫客戶名稱，或勾選「小賣自取」');
   if (k === 'dist' && f.dSendWay === SALES.HOME_DELIVERY && !f.rAddr.trim()) return alert('選擇宅配時請填寫宅配地址');
+  const gone = items.filter(i => i.missing);
+  if (gone.length) return alert('下面這些品項在庫存表裡找不到，為了避免扣錯庫存，這張單先不送出：\n\n'
+    + gone.map(i => `・${i.name} ${i.spec}`).join('\n')
+    + '\n\n可能是產品在庫存表被改名或刪掉了。請先確認庫存表，或把這個品項刪掉重新選一次。');
 
   const src = saleSrc();
   const noStock = skipStock(), tags = noStockTags();

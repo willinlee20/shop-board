@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="2.7">
+<meta name="app-version" content="2.9">
 <title>西門龍門儀錶板</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -188,7 +188,7 @@ textarea{min-height:84px;resize:vertical}
 /* 品項列 */
 .item-row{border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px;background:#fbfcfe}
 .item-row .r2{display:flex;gap:8px;margin-top:8px;align-items:flex-end}
-.item-row .r2 .f{flex:1}
+.item-row .r2 .f{flex:1 1 0;min-width:0}
 .item-row .r2 label{display:block;font-size:12px;color:var(--ink-3);margin-bottom:4px}
 .item-row .del{border:0;background:transparent;color:var(--bad);cursor:pointer;padding:10px}
 .stockline{font-size:12px;color:var(--ink-3);margin-top:6px}
@@ -218,15 +218,43 @@ textarea{min-height:84px;resize:vertical}
 .group-top .del{margin-left:auto}
 .group-box .f>label{display:block;font-size:12px;color:var(--ink-3);margin-bottom:4px}
 .spec-list{margin-top:10px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff}
-.spec-head,.spec-row{display:flex;align-items:center;gap:10px;padding:7px 11px;border-top:1px solid var(--line)}
-.spec-head{border-top:0;background:#f8fafc;font-size:12px;color:var(--ink-3);padding:6px 11px}
+.spec-head,.spec-row{display:flex;align-items:center;gap:8px;padding:7px 10px;border-top:1px solid var(--line)}
+.spec-head{border-top:0;background:#f8fafc;font-size:12px;color:var(--ink-3);padding:6px 10px}
 .spec-row .nm,.spec-head span:first-child{flex:1 1 auto;min-width:0;font-size:14px;word-break:break-word}
-.spec-row .sq,.spec-head .sq{width:86px;text-align:right;font-size:13px;color:var(--ink-2);font-variant-numeric:tabular-nums;flex:0 0 auto}
+.spec-row .sq,.spec-head .sq{width:56px;text-align:right;font-size:13px;color:var(--ink-2);font-variant-numeric:tabular-nums;flex:0 0 auto}
 .spec-row .sq.zero{color:var(--ink-3)}
-.spec-head .qt{width:74px;text-align:center;flex:0 0 auto}
-.spec-row input.gq{width:74px;flex:0 0 auto;padding:7px 8px;text-align:center;border-radius:8px}
+/* 數量／單價兩欄跟表頭對齊，寬度要一模一樣 */
+.spec-head .qt{width:112px;text-align:center;flex:0 0 auto}
+.spec-head .qt.pr{width:92px}
+.spec-row .stp{flex:0 0 112px;width:112px}
+.spec-row input.gp{flex:0 0 92px;width:92px;text-align:center;padding-left:6px;padding-right:6px}
 .spec-row.has{background:var(--brand-soft)}
 .spec-row.has .nm{font-weight:500}
+/* 數量欄：−／＋ 按鈕 */
+.stp{display:inline-flex;align-items:stretch;width:100%}
+.stp .sb{
+  flex:0 0 auto;width:34px;height:46px;padding:0;border:1px solid var(--line);background:#fff;
+  color:var(--ink-2);font-size:19px;font-weight:700;line-height:1;cursor:pointer;
+  display:grid;place-items:center;user-select:none;-webkit-user-select:none;touch-action:manipulation;
+}
+.stp .sb:first-child{border-radius:10px 0 0 10px}
+.stp .sb:last-child{border-radius:0 10px 10px 0}
+.stp .sb:hover{background:#f1f5f9}
+.stp .sb:active{background:var(--brand);border-color:var(--brand);color:#fff}
+/* flex-basis 用 0，數字框才會跟著欄位一起縮，不會把旁邊的單價／小計擠出去 */
+.stp input{flex:1 1 0;min-width:0;width:0;text-align:center;border-radius:0;
+  border-left:0;border-right:0;padding-left:2px;padding-right:2px}
+.stp input:focus{outline-offset:-2px}
+/* 手機：把空間讓給規格名稱，才不會一個字一行 */
+@media(max-width:480px){
+  .spec-head,.spec-row{gap:6px;padding:7px 8px}
+  .spec-row .sq,.spec-head .sq{width:36px}
+  .spec-head .qt{width:100px}
+  .spec-head .qt.pr{width:70px}
+  .spec-row .stp{flex:0 0 100px;width:100px}
+  .spec-row input.gp{flex:0 0 70px;width:70px}
+  .stp .sb{width:30px;font-size:17px}
+}
 .spec-empty{margin-top:10px;padding:14px 12px;border:1px dashed var(--line);border-radius:10px;
   font-size:13px;color:var(--ink-3);text-align:center;background:#fff}
 .add-item{width:100%;justify-content:center;border-style:dashed;padding:11px}
@@ -522,7 +550,7 @@ textarea{min-height:84px;resize:vertical}
 <div id="toastHost"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="app.js?v=2.7"></script>
-<script src="sales.js?v=2.7"></script>
+<script src="app.js?v=2.9"></script>
+<script src="sales.js?v=2.9"></script>
 </body>
 </html>

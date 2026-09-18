@@ -5,7 +5,7 @@
    ========================================================================= */
 
 /* ----------------------------- 版本 ------------------------------------ */
-const APP_VERSION = '2.7';          // 每次改版都會更新，畫面右上角看得到
+const APP_VERSION = '2.9';          // 每次改版都會更新，畫面右上角看得到
 const APP_DATE = '2026-09-18';
 
 /* ----------------------------- 設定區 -----------------------------------
@@ -94,6 +94,32 @@ function todayStr() {
   const d = new Date(), p = x => String(x).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
+/**
+ * 數量欄：左右各一顆 −／＋ 按鈕，按一下加減 1，中間還是可以直接打字。
+ * app.js 和 sales.js 的每個「數量」都用這個，所以按鈕行為到處一樣。
+ */
+function qtyIn(cls, val, ph, min, extra) {
+  const lo = min === undefined ? 0 : min;
+  return `<span class="stp">
+    <button type="button" class="sb" data-step="-1" tabindex="-1" aria-label="減一">−</button>
+    <input type="number" inputmode="numeric" class="${cls}" min="${lo}" step="1"
+      value="${val ?? ''}" placeholder="${ph || ''}" ${extra || ''}>
+    <button type="button" class="sb" data-step="1" tabindex="-1" aria-label="加一">＋</button>
+  </span>`;
+}
+// −／＋ 用事件委派處理：改完值再自己發一次 input 事件，
+// 這樣原本綁在輸入框上的計算（小計、庫存不足提示、總金額）完全不用改
+document.addEventListener('click', e => {
+  const b = e.target.closest('.stp .sb');
+  if (!b) return;
+  const inp = b.parentElement.querySelector('input');
+  if (!inp || inp.disabled || inp.readOnly) return;
+  const lo = inp.min === '' ? 0 : (Number(inp.min) || 0);
+  const next = Math.max(lo, (Number(inp.value) || 0) + Number(b.dataset.step));
+  inp.value = (next === 0 && lo === 0) ? '' : String(next);   // 歸零就留白，顯示灰色的 0
+  inp.dispatchEvent(new Event('input', { bubbles: true }));
+});
+
 /** 把儲存格內容轉數字；"$1,700" → 1700，公式 "=A1+1" → null */
 function toNum(v) {
   if (v === null || v === undefined || v === '') return 0;
@@ -440,15 +466,22 @@ function planReserve(items) {
   const used = new Map();                       // row|src → 這張單已經規劃扣掉的量
   const plan = [];
   for (const it of items) {
-    const p = S.products.byRow.get(it.row);
-    if (!p) continue;
+    // 品項的身分是「名稱＋規格」，列號只是拿來對照的。
+    // 找不到就標成 missing 丟回去，讓 submitForm 擋下來，不可以默默跳過（會漏扣庫存）
+    const p = findProduct(it);
+    if (!p) {
+      plan.push({ row: it.row, name: it.name || '', spec: it.spec || '', qty: it.qty,
+                  price: it.price || 0, src: it.src || DEFAULT_SRC(), short: 0, missing: true });
+      continue;
+    }
+    const row = p.sheetRow;                     // 一律用現在的列號，不用單子上舊的
     const src = it.src || DEFAULT_SRC();
-    const k = it.row + '|' + src;
+    const k = row + '|' + src;
     const u = used.get(k) || 0;
     const avail = (p.nums[src] || 0) - u;
     used.set(k, u + it.qty);
     plan.push({
-      row: it.row, name: p.name, spec: p.spec, qty: it.qty,
+      row, name: p.name, spec: p.spec, qty: it.qty,
       price: it.price || 0, src,
       short: Math.max(it.qty - Math.max(avail, 0), 0)   // 來源不夠的數量
     });
@@ -474,15 +507,36 @@ function normPlan(plan) {
  * 一定要「產品名稱＋規格」優先、列號只當備援——庫存表插過列之後，
  * 舊紀錄裡的列號會指到別的產品，直接用列號會抓成完全不同的東西。
  */
+/**
+ * 用「產品名稱＋規格」找出這個品項現在在庫存表的哪一列。
+ * 列號只是快取：庫存表插入／刪除列之後，同一個列號會指到完全不同的產品。
+ * 所以只要這筆資料有記產品名稱，就一定用名稱＋規格找，
+ * 找不到就回 null（讓上層擋下來），**絕對不可以退回去用列號猜**——
+ * 猜錯的話會把客人訂的東西換成別的產品，而且庫存也會扣錯。
+ */
+const normName = s => String(s || '').replace(/\s+/g, '').toLowerCase();
 function findProduct(i) {
-  if (i && i.name) {
-    const list = S.products.byName.get(i.name);
+  if (!i) return null;
+  if (i.name) {
+    const P = S.products;
+    const list = P.byName.get(i.name);
     if (list) {
       const hit = list.find(x => String(x.spec || '') === String(i.spec || ''));
       if (hit) return hit;
     }
+    // 名稱或規格的空白、大小寫被改過（例如「小蠻牛 煙彈」被改成「小蠻牛煙彈」）時，
+    // 把空白拿掉、不分大小寫再找一次。這還是靠名稱認產品，不是用列號猜。
+    if (!P.byKey) {
+      P.byKey = new Map();
+      (P.rows || []).forEach(x => {
+        const k = normName(x.name) + '\u0000' + normName(x.spec);
+        if (!P.byKey.has(k)) P.byKey.set(k, x);
+      });
+    }
+    return P.byKey.get(normName(i.name) + '\u0000' + normName(i.spec)) || null;
   }
-  return (i && i.row) ? (S.products.byRow.get(i.row) || null) : null;
+  // 沒有記名稱的舊資料，只能靠列號
+  return i.row ? (S.products.byRow.get(i.row) || null) : null;
 }
 function resolveRow(p) {
   const hit = findProduct(p);
@@ -1223,7 +1277,11 @@ function itemsFromGroups(groups) {
   for (const g of (groups || [])) {
     for (const row of Object.keys(g.qty)) {
       const n = Number(g.qty[row]) || 0;
-      if (n > 0) items.push({ row: +row, qty: n, price: 0, src: g.src || DEFAULT_SRC() });
+      if (n > 0) {
+        const p = S.products.byRow.get(+row);
+        items.push({ row: +row, name: p ? p.name : (g.name || ''), spec: p ? p.spec : '',
+                     qty: n, price: 0, src: g.src || DEFAULT_SRC() });
+      }
     }
   }
   return items;
@@ -1259,14 +1317,14 @@ function renderGroups() {
 
     const specs = variants.length ? `
       <div class="spec-list">
-        <div class="spec-head"><span>規格</span><span class="sq">${esc(srcLabel(src))}現有</span><span class="qt">數量</span></div>
+        <div class="spec-head"><span>規格</span><span class="sq">${esc(srcLabel(src))}</span><span class="qt">數量</span></div>
         ${variants.map(v => {
           const have = v.nums[src] || 0;
           const q = g.qty[v.sheetRow] || '';
           return `<div class="spec-row${q ? ' has' : ''}" data-row="${v.sheetRow}">
             <span class="nm">${esc(v.spec || '（無規格）')}</span>
             <span class="sq${have <= 0 ? ' zero' : ''}">${have}</span>
-            <input type="number" class="gq" min="0" step="1" placeholder="0" value="${q}" data-row="${v.sheetRow}">
+            ${qtyIn('gq', q, '0', 0, `data-row="${v.sheetRow}"`)}
           </div>`;
         }).join('')}
       </div>` : (g.name ? '' : `<div class="spec-empty">選好產品名稱後，這裡會列出所有規格，直接填數量即可</div>`);
@@ -1382,7 +1440,7 @@ function renderItems() {
       ${(!isStock && p && (it.src || DEFAULT_SRC()) === CONFIG.H.warehouse)
         ? `<div class="warehouse-alert">🚚 從總倉調度，請協助備貨<span>送出後會自動幫你開一張備貨單，提醒把貨送到 ${esc(FORM.store)}</span></div>` : ''}
       <div class="r2">
-        <div class="f"><label>數量</label><input type="number" class="itemQty" min="1" step="1" value="${it.qty}"></div>
+        <div class="f"><label>數量</label>${qtyIn('itemQty', it.qty, '1', 1)}</div>
         ${isStock ? '' : `
         <div class="f"><label>銷售價格（單價）</label><input type="number" class="itemPrice" min="0" step="1" value="${it.price}"></div>
         <div class="f" style="max-width:110px"><label>小計</label>
@@ -1407,15 +1465,16 @@ function renderItems() {
 
     row.querySelector('.itemName').onchange = e => {
       it.name = e.target.value;
-      it.row = null;
+      it.row = null; it.spec = '';
       const vs = S.products.byName.get(it.name) || [];
-      if (vs.length === 1) { it.row = vs[0].sheetRow; it.price = vs[0].price; }   // 只有一種規格就自動選好
+      // 只有一種規格就自動選好
+      if (vs.length === 1) { it.row = vs[0].sheetRow; it.price = vs[0].price; it.spec = vs[0].spec; }
       renderItems(); updateTotal();
     };
     row.querySelector('.itemSpec').onchange = e => {
       it.row = +e.target.value || null;
       const p = it.row ? S.products.byRow.get(it.row) : null;
-      if (p) { it.price = p.price; it.cat = p.cat; }
+      if (p) { it.price = p.price; it.cat = p.cat; it.name = p.name; it.spec = p.spec; }
       renderItems(); updateTotal();
     };
     row.querySelector('.itemSrc').onchange = e => {
@@ -1475,7 +1534,8 @@ async function submitForm() {
   } else {
     if (!(FORM.cName || '').trim()) return alert('請填寫客戶名稱');
     if (!FORM.date) return alert('請選擇預計取貨日期');
-    const items = FORM.items.filter(i => i.row).map(i => ({ row: i.row, qty: i.qty, price: i.price, src: i.src || DEFAULT_SRC() }));
+    const items = FORM.items.filter(i => i.row).map(i =>
+      ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, price: i.price, src: i.src || DEFAULT_SRC() }));
     if (!items.length) return alert('請選擇預訂品項：先選「產品名稱」，再選「產品規格」');
 
     plan = planReserve(items);
@@ -1492,6 +1552,16 @@ async function submitForm() {
       ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, src: p.src })));
   }
   f['門市'] = FORM.store;
+
+  // 有品項在庫存表找不到（被改名或刪掉）就整張擋下來。
+  // 寧可不讓他送出，也不能猜——猜錯會把品項換成別的產品，庫存也會扣到別人身上。
+  const gone = plan ? plan.filter(p => p.missing) : [];
+  if (gone.length) {
+    return alert('下面這些品項在庫存表裡找不到，為了避免扣錯庫存，這張單先不送出：\n\n'
+      + gone.map(p => `・${p.name} ${p.spec}`).join('\n')
+      + '\n\n可能是產品在庫存表被改名或刪掉了。請先確認庫存表的「產品名稱／產品規格」，'
+      + '或是把這個品項刪掉重新選一次。');
+  }
 
   const shorts = plan ? plan.filter(p => p.short > 0) : [];
   const shortHTML = shorts.length
