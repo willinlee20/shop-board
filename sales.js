@@ -22,6 +22,8 @@ const SALES = {
   COLLECT: ['已收貨款', '貨到付款'],
   COLLECT_PAID: '已收貨款',              // 選這個 → 結帳狀態直接帶「已結帳」
   VOID: '已作廢',
+  PAYWAY: ['現金', '匯款'],          // 來店單的收款方式，出納對帳用
+  CLOSE_SHEET: 'DayClose日結',       // 每間門市每天「本日營業結束」的紀錄
   // 網路單：這兩種情況不扣總倉庫存（貨不是從我們倉庫出的）
   NOSTOCK: [
     { key: 'agent', label: '本訂單廠商代出（不扣總倉庫存）', tag: '廠商代出' },
@@ -45,7 +47,7 @@ const SALES = {
 const SH_HEAD = {
   shop: ['id', '訂單日期', '建立時間', '建立者', '門市', '負責業務', '品項明細', '金額', '成本',
          '備註', '品項JSON', '庫存異動JSON', '庫存狀態', '關聯單號', '狀態',
-         '最後修改時間', '最後修改者', '修改紀錄', '封存'],
+         '最後修改時間', '最後修改者', '修改紀錄', '封存', '收款方式'],
   online: ['id', '訂單日期', '建立時間', '建立者', '客戶名稱', '電話', '訂單內容', '價格', '運費', '成本',
            '收款方式', '寄送方式', '店名',
            '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '備註',
@@ -59,6 +61,11 @@ const SH_HEAD = {
          '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '備註',
          '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態', '宅配地址']
 };
+/** 日結分頁：一間門市一天一列 */
+const CLOSE_HEAD = ['id', '門市', '營業日', '結束時間', '結束者',
+                    '筆數', '金額', '成本', '現金', '匯款', '備註'];
+const CLOSE_LAST = 'K';
+
 const SH_COL = {};                       // kind → {欄位: 索引}
 Object.keys(SH_HEAD).forEach(k => { SH_COL[k] = {}; SH_HEAD[k].forEach((h, i) => SH_COL[k][h] = i); });
 const lastCol = k => colLetter(SH_HEAD[k].length - 1);
@@ -69,6 +76,7 @@ const SALE = {
   view: 'home',
   titles: {},               // kind → 分頁名稱
   rows: { shop: [], online: [], mini: [], dist: [] },
+  closes: [],               // 日結紀錄（每間門市每天一筆）
   lists: { staff: [], mini: [], dist: [] },
   form: null,
   loaded: false
@@ -85,6 +93,7 @@ window.initSales = async function (sheets) {
     SALE.titles[k] = t;
     if (!titles.includes(t)) need.push(t);
   }
+  if (!titles.includes(SALES.CLOSE_SHEET)) need.push(SALES.CLOSE_SHEET);
   if (need.length) {
     await api(`${CONFIG.SPREADSHEET_ID}:batchUpdate`, {
       method: 'POST',
@@ -98,6 +107,13 @@ window.initSales = async function (sheets) {
     const hdr = (await readRange(t, `A1:${lastCol(k)}1`))[0] || [];
     if (SH_HEAD[k].some((h, i) => String(hdr[i] || '') !== h)) {
       await writeRanges([{ range: `'${t}'!A1:${lastCol(k)}1`, values: [SH_HEAD[k]] }]);
+    }
+  }
+  {
+    const t = SALES.CLOSE_SHEET;
+    const hdr = (await readRange(t, `A1:${CLOSE_LAST}1`))[0] || [];
+    if (CLOSE_HEAD.some((h, i) => String(hdr[i] || '') !== h)) {
+      await writeRanges([{ range: `'${t}'!A1:${CLOSE_LAST}1`, values: [CLOSE_HEAD] }]);
     }
   }
 
@@ -141,6 +157,12 @@ async function loadSales() {
       return o;
     }).filter(o => o.id);
   }
+  const cr = await readRange(SALES.CLOSE_SHEET, `A2:${CLOSE_LAST}2000`);
+  SALE.closes = cr.map((r, n) => {
+    const o = { _row: n + 2 };
+    CLOSE_HEAD.forEach((h, ci) => o[h] = r[ci] ?? '');
+    return o;
+  }).filter(o => o.id && o['門市'] && o['營業日']);
 }
 
 /* ----------------------------- 共用小工具 ------------------------------ */
@@ -328,12 +350,15 @@ function newSaleItem() { return { cat: S.lastCat || null, name: '', row: null, q
 function newDistGroup() { return { cat: S.lastCat || null, name: '', qty: {}, price: {} }; }
 
 function openSaleForm(kind) {
+  const store0 = CONFIG.STORES[0].label;
   SALE.form = {
-    kind, date: todayStr(), staff: defaultStaff(),
-    store: CONFIG.STORES[0].label,
+    // 來店單：這間店按過「本日營業結束」的話，日期直接跳到下一個營業日
+    kind, date: kind === 'shop' ? openDay(store0) : todayStr(), staff: defaultStaff(),
+    store: store0,
     items: [newSaleItem()], groups: [newDistGroup()],
     cName: '', tel: '', note: '', fee: '', payStatus: SALES.PAY[0], payDate: '',
     collect: SALES.COLLECT[0],
+    payWay: SALES.PAYWAY[0],           // 來店單：現金／匯款
     noStock: '',                       // 網路單庫存處理：'' = 扣總倉；agent／order = 不扣
     miniName: (SALE.lists.mini[0] || {}).name || '', selfPick: false, pickup: SALES.PICKUP[0],
     sendWay: SALES.SEND_WAY[0], storeName: '',
@@ -428,7 +453,7 @@ function renderSaleBody() {
     html += `<div class="field"><label>門市 <span class="req">*</span></label>
         <div class="chips big-chips" id="storeChips2">
           ${CONFIG.STORES.map(s => `<button class="chip${s.label === f.store ? ' on' : ''}" data-store="${s.label}">${s.label}</button>`).join('')}
-        </div>${srcNote()}</div>` + staffField + itemsBlock() + noteField;
+        </div>${srcNote()}</div>` + staffField + itemsBlock() + payWayField() + noteField;
   }
 
   if (f.kind === 'online') {
@@ -505,6 +530,15 @@ function renderSaleBody() {
   wireSaleBody();
 }
 
+/** 來店單的收款方式：出納要用這個對帳，所以放在金額合計正下方 */
+function payWayField() {
+  const f = SALE.form;
+  return `<div class="field"><label>收款方式 <span class="req">*</span></label>
+    <div class="chips big-chips" id="payWayChips">
+      ${SALES.PAYWAY.map(p => `<button class="chip${p === f.payWay ? ' on' : ''}" data-payway="${p}">${p}</button>`).join('')}
+    </div></div>`;
+}
+
 function itemsBlock() {
   return `<div class="field"><label>訂單內容 <span class="req">*</span></label>
     <div id="saleItems"></div>
@@ -521,7 +555,7 @@ function distBlock() {
 function wireSaleBody() {
   const f = SALE.form;
   const on = (id, ev, fn) => { const el = $(id); if (el) el[ev] = fn; };
-  on('fDate2', 'oninput', e => f.date = e.target.value);
+  on('fDate2', 'oninput', e => { f.date = e.target.value; f.dateTouched = true; });
   on('fStaff', 'onchange', e => f.staff = e.target.value);
   on('fNote2', 'oninput', e => f.note = e.target.value);
   on('fCName', 'oninput', e => f.cName = e.target.value);
@@ -535,8 +569,14 @@ function wireSaleBody() {
   document.querySelectorAll('.fRTel').forEach(el => el.oninput = e => f.rTel = e.target.value);
   document.querySelectorAll('.fFee').forEach(el => el.oninput = e => f.fee = e.target.value);
 
-  document.querySelectorAll('#storeChips2 .chip').forEach(c => c.onclick = () => { f.store = c.dataset.store; renderSaleBody(); });
+  document.querySelectorAll('#storeChips2 .chip').forEach(c => c.onclick = () => {
+    f.store = c.dataset.store;
+    // 兩間店的日結進度可能不一樣，所以換店要重算預設日期；同事自己改過日期就不動
+    if (f.kind === 'shop' && !f.editRow && !f.dateTouched) f.date = openDay(f.store);
+    renderSaleBody();
+  });
   document.querySelectorAll('#payChips .chip').forEach(c => c.onclick = () => { f.payStatus = c.dataset.pay; renderSaleBody(); });
+  document.querySelectorAll('#payWayChips .chip').forEach(c => c.onclick = () => { f.payWay = c.dataset.payway; renderSaleBody(); });
   document.querySelectorAll('#pickChips .chip').forEach(c => c.onclick = () => { f.pickup = c.dataset.pick; renderSaleBody(); });
   document.querySelectorAll('#wayChips .chip').forEach(c => c.onclick = () => { f.sendWay = c.dataset.way; renderSaleBody(); });
   document.querySelectorAll('input[name="nsMode"]').forEach(el => el.onchange = e => {
@@ -749,6 +789,7 @@ async function submitSale() {
         : `<p style="font-size:14px;color:var(--ink-2)">送出後會直接從 <b>${sEsc(srcLabel(src))}</b> 扣掉庫存（總數減少）：</p>`}
       <pre class="pre">${esc(items.map(i => `・${i.name} ${i.spec} ×${i.qty}　${money(i.price * i.qty)}`).join('\n'))}</pre>
       <p style="font-size:15px"><b>合計 ${money(total)}</b>${f.fee ? `　運費 ${money(f.fee)}` : ''}</p>
+      ${k === 'shop' ? `<p style="font-size:14px;color:var(--ink-2)">收款方式：<b>${sEsc(f.payWay)}</b></p>` : ''}
       ${k === 'dist' ? `<p style="font-size:14px;color:var(--ink-2)">寄送方式：<b>${sEsc(f.dSendWay)}</b><br>
         ${f.dSendWay === SALES.HOME_DELIVERY
           ? `宅配地址：<b>${sEsc(f.rAddr.trim()) || '（未填）'}</b>`
@@ -780,7 +821,7 @@ async function submitSale() {
 
     if (k === 'shop') {
       set('門市', f.store); set('品項明細', itemsText(items)); set('金額', total);
-      set('庫存狀態', '已扣庫存');
+      set('庫存狀態', '已扣庫存'); set('收款方式', f.payWay);
     } else {
       set('訂單內容', itemsText(items)); set('價格', total); set('運費', Number(f.fee) || 0);
       set('結帳狀態', f.payStatus); set('結帳日', f.payDate);
@@ -863,11 +904,22 @@ const shopLinked = r => !!String(r['關聯單號'] || '').trim();
 
 function renderShopLog() {
   SALE.view = 'shoplog';
-  const rows = SALE.rows.shop.filter(r => !shopArchived(r)).reverse().slice(0, 80);
+  const rows = SALE.rows.shop.filter(r => !shopArchived(r))
+    .sort((a, b) => String(b['訂單日期']).localeCompare(String(a['訂單日期']))
+      || String(b['建立時間']).localeCompare(String(a['建立時間'])))
+    .slice(0, 80);
   const hidden = SALE.rows.shop.filter(shopArchived).length;
-  $('salesView').innerHTML = backBar('來店銷售紀錄') + shopPerf() +
-    (rows.length ? rows.map(shopCard).join('')
-      : `<div class="empty">沒有待顯示的來店銷售紀錄</div>`) +
+
+  // 一天一段：日期一換就插一條分隔線，上面寫那天這間店做了多少
+  let last = null, body = '';
+  rows.forEach(r => {
+    const day = String(r['訂單日期'] || '');
+    if (day !== last) { body += dayDivider(day); last = day; }
+    body += shopCard(r);
+  });
+
+  $('salesView').innerHTML = backBar('來店銷售紀錄') + todayPanel() + shopPerf() +
+    (rows.length ? body : `<div class="empty">沒有待顯示的來店銷售紀錄</div>`) +
     (hidden ? `<div class="hint-row" style="margin-top:12px">另有 ${hidden} 筆已收起（試算表裡還在，「查詢」查得到）</div>` : '');
   wireShopLog();
 }
@@ -905,9 +957,17 @@ function shopPerf() {
     </div>
     ${line('門市', group('門市'))}
     ${line('業務', group('負責業務'))}
+    ${(() => {
+      const cash = inRange.reduce((t, r) => t + (payWayOf(r) === '現金' ? (Number(r['金額']) || 0) : 0), 0);
+      return sum ? `<div class="perf-row"><span class="pk">收款</span><span class="pv">
+        <i><b>現金</b> ${money(cash)}</i><i><b>匯款</b> ${money(sum - cash)}</i></span></div>` : '';
+    })()}
     ${sum ? `<div class="perf-row"><span class="pk">毛利</span><span class="pv"><i>${money(sum - cost)}　<b style="font-weight:400;color:var(--ink-3)">成本 ${money(cost)}</b></i></span></div>` : ''}
   </div>`;
 }
+
+/** 舊單沒填的一律當現金（以前只收現金） */
+const payWayOf = r => SALES.PAYWAY.includes(r['收款方式']) ? r['收款方式'] : SALES.PAYWAY[0];
 
 function shopCard(r) {
   const voided = shopVoided(r), linked = shopLinked(r);
@@ -916,7 +976,7 @@ function shopCard(r) {
     <div class="rec-top">
       <span class="who2">${sEsc(r['門市'] || '—')}</span>
       <span class="pill-pay ${voided ? 'no' : 'yes'}">${voided ? '已作廢' : '有效'}</span>
-      <span class="amt">${money(r['金額'])}</span>
+      <span class="amt">${money(r['金額'])}<i class="pw ${payWayOf(r) === '匯款' ? 'bank' : 'cash'}">${sEsc(payWayOf(r))}</i></span>
     </div>
     <div class="rec-meta">${sEsc(r['訂單日期'])}　·　業務 <b>${sEsc(r['負責業務'] || '—')}</b>　·　${sEsc(r.id)}
       ${r['建立者'] ? `　·　開單 ${sEsc(r['建立者'])}` : ''}</div>
@@ -937,7 +997,22 @@ function shopCard(r) {
     </div></div>`;
 }
 
+/** 每天之間的分隔線：左邊是日期，右邊是那天各門市的小計 */
+function dayDivider(day) {
+  const parts = CONFIG.STORES.map(st => {
+    const d = dayStats(st.label, day);
+    if (!d.n) return '';
+    const done = closeOf(st.label, day);
+    return `<span class="ds">${sEsc(st.label)} <b>${money(d.amount)}</b>
+      <i>${d.n} 筆</i>${done ? '<em>已結</em>' : ''}</span>`;
+  }).filter(Boolean).join('');
+  return `<div class="day-div"><span class="dd-date">${sEsc(day) || '（沒有日期）'}</span>
+    <span class="dd-sum">${parts}</span></div>`;
+}
+
 function wireShopLog() {
+  document.querySelectorAll('[data-close]').forEach(b => b.onclick = () => closeDay(b.dataset.close));
+  document.querySelectorAll('[data-reopen]').forEach(b => b.onclick = () => reopenDay(b.dataset.reopen));
   document.querySelectorAll('.rec-card[data-id]').forEach(card => {
     const r = SALE.rows.shop.find(x => x.id === card.dataset.id);
     if (!r) return;
@@ -972,6 +1047,7 @@ function openSaleEdit(kind, r) {
   const f = SALE.form;
   f.editRow = r;
   f.date = r['訂單日期'] || todayStr();
+  f.dateTouched = true;               // 改單時日期照單子上的走，不要被日結蓋掉
   f.staff = r['負責業務'] || '';
   f.note = r['備註'] || '';
   f.fee = r['運費'] === '' || r['運費'] === undefined ? '' : String(r['運費']);
@@ -997,6 +1073,7 @@ function openSaleEdit(kind, r) {
 
   if (kind === 'shop') {
     f.store = r['門市'] || CONFIG.STORES[0].label;
+    f.payWay = SALES.PAYWAY.includes(r['收款方式']) ? r['收款方式'] : SALES.PAYWAY[0];
   }
   if (kind === 'online') {
     f.cName = r['客戶名稱'] || ''; f.tel = r['電話'] || '';
@@ -1059,7 +1136,7 @@ function shopDiff(r, f, items) {
   };
   const k = f.kind;
   cmp('訂單日期', r['訂單日期'], f.date);
-  if (k === 'shop') cmp('門市', r['門市'], f.store);
+  if (k === 'shop') { cmp('門市', r['門市'], f.store); cmp('收款方式', r['收款方式'] || SALES.PAYWAY[0], f.payWay); }
   if (k === 'online' || k === 'mini') { cmp('客戶名稱', r['客戶名稱'], f.cName.trim()); cmp('電話', r['電話'], f.tel.trim()); }
   if (k === 'online') {
     cmp('寄送方式', r['寄送方式'], f.sendWay); cmp('店名', r['店名'], f.storeName.trim());
@@ -1133,7 +1210,7 @@ async function submitShopEdit() {
     };
     if (k === 'shop') {
       Object.assign(patch, {
-        門市: f.store, 品項明細: itemsText(items), 金額: total,
+        門市: f.store, 品項明細: itemsText(items), 金額: total, 收款方式: f.payWay,
         最後修改時間: nowStr(), 最後修改者: userName(),
         修改紀錄: (String(r['修改紀錄'] || '') + `\n${nowStr()} ${userName()}：${diff.join('；').replace(/\n/g, ' ')}`).trim()
       });
@@ -1737,4 +1814,127 @@ function renderHealth() {
     +
     (!bad.length && !warn.length
       ? `<div class="empty">所有還沒結案的單，品項都跟庫存表對得起來 🎉</div>` : '');
+}
+
+/* ========================= 本日營業結束（日結） =========================
+   每間門市各自結自己的一天。按下去之後：
+   ① 這間店的來店單預設日期跳到隔天（還是可以手動改回來）
+   ② 來店銷售紀錄在那一天下面畫一條分隔線，把每天的單分開
+   ③ 最上面顯示當天的簡易報表（筆數／金額／現金／匯款／毛利）
+   紀錄寫在 DayClose日結 分頁，換裝置、換人登入都看得到。             */
+
+const dayAdd = (ymd, n) => {
+  const [y, m, d] = String(ymd).split('-').map(Number);
+  const t = new Date(y, m - 1, d + n), p = x => String(x).padStart(2, '0');
+  return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())}`;
+};
+
+/** 這間門市最後結束的營業日（沒結過就是空字串） */
+function lastClosedDay(store) {
+  return (SALE.closes || [])
+    .filter(c => c['門市'] === store)
+    .reduce((a, c) => (String(c['營業日']) > a ? String(c['營業日']) : a), '');
+}
+/** 這間門市「現在正在做的那一天」：結到今天或以後，就從隔天算起 */
+function openDay(store) {
+  const last = lastClosedDay(store);
+  return (last && last >= todayStr()) ? dayAdd(last, 1) : todayStr();
+}
+const closeOf = (store, day) =>
+  (SALE.closes || []).find(c => c['門市'] === store && String(c['營業日']) === String(day)) || null;
+
+/** 某間門市某一天的來店單統計（作廢的不算） */
+function dayStats(store, day) {
+  const rows = SALE.rows.shop.filter(r =>
+    r['門市'] === store && String(r['訂單日期']) === String(day) && !shopVoided(r));
+  const sum = (f, pick) => rows.reduce((a, r) =>
+    a + ((!pick || payWayOf(r) === pick) ? (Number(r[f]) || 0) : 0), 0);
+  return {
+    n: rows.length, amount: sum('金額'), cost: sum('成本'),
+    cash: sum('金額', '現金'), bank: sum('金額', '匯款'),
+    voided: SALE.rows.shop.filter(r =>
+      r['門市'] === store && String(r['訂單日期']) === String(day) && shopVoided(r)).length
+  };
+}
+
+/** 來店銷售紀錄最上面：每間門市今天做到哪裡 ＋ 結束營業按鈕 */
+function todayPanel() {
+  return `<div class="day-panel">${CONFIG.STORES.map(st => {
+    const store = st.label;
+    const next = openDay(store);                 // 下一張單會用的日期
+    const closed = next > todayStr();            // 今天已經結掉了
+    const day = closed ? dayAdd(next, -1) : next;   // 卡片上顯示的那一天
+    const d = dayStats(store, day), done = closeOf(store, day);
+    return `<div class="dp-card${done ? ' closed' : ''}">
+      <div class="dp-top">
+        <span class="nm">${sEsc(store)}</span>
+        <span class="dy">${sEsc(day)}${done ? `<i>　下一個營業日 ${sEsc(next)}</i>` : ''}</span>
+      </div>
+      <div class="dp-num"><b>${money(d.amount)}</b><span>${d.n} 筆</span></div>
+      <div class="dp-split">
+        <span>現金 <b>${money(d.cash)}</b></span>
+        <span>匯款 <b>${money(d.bank)}</b></span>
+        ${d.amount ? `<span>毛利 <b>${money(d.amount - d.cost)}</b></span>` : ''}
+        ${d.voided ? `<span class="v">作廢 ${d.voided} 筆</span>` : ''}
+      </div>
+      <div class="dp-foot">
+        ${done
+          ? `<span class="ok">✓ 已結束　${sEsc(String(done['結束時間']).slice(5))}　${sEsc(done['結束者'])}</span>
+             <button class="btn btn-sm" data-reopen="${sEsc(store)}">↩ 取消日結</button>`
+          : `<button class="btn btn-sm btn-ok" data-close="${sEsc(store)}"${d.n ? '' : ' disabled title="今天還沒有來店單"'}>🔒 本日營業結束</button>`}
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+async function closeDay(store) {
+  const day = openDay(store), d = dayStats(store, day);
+  const ok = await confirmModal({
+    title: `${store}　${day}　本日營業結束？`,
+    lines: `<pre class="pre">筆數　${d.n} 筆${d.voided ? `（另有 ${d.voided} 筆已作廢，不計入）` : ''}
+營業額　${money(d.amount)}
+　現金　${money(d.cash)}
+　匯款　${money(d.bank)}
+成本　${money(d.cost)}
+毛利　${money(d.amount - d.cost)}</pre>
+      <div class="alert-box">結束之後，<b>${sEsc(store)}</b> 的新增來店銷售單預設日期會變成
+        <b>${sEsc(dayAdd(day, 1))}</b>（還是可以手動改回來），紀錄上也會畫一條分隔線。
+        按錯了可以再按「↩ 取消日結」。</div>`,
+    okText: '確定，結束本日'
+  });
+  if (!ok) return;
+  try {
+    const v = new Array(CLOSE_HEAD.length).fill('');
+    const set = (k, x) => { v[CLOSE_HEAD.indexOf(k)] = x; };
+    set('id', 'C' + Date.now().toString(36).toUpperCase());
+    set('門市', store); set('營業日', day); set('結束時間', nowStr()); set('結束者', userName());
+    set('筆數', d.n); set('金額', d.amount); set('成本', d.cost);
+    set('現金', d.cash); set('匯款', d.bank);
+    await appendRow(SALES.CLOSE_SHEET, v);
+    await loadSales(); renderShopLog();
+    toast(`${store} ${day} 已結束營業`, 'ok');
+  } catch (err) { alert('失敗：\n' + err.message); }
+}
+
+async function reopenDay(store) {
+  const last = lastClosedDay(store);
+  const rec = last ? closeOf(store, last) : null;
+  if (!rec) return;
+  const ok = await confirmModal({
+    title: '取消日結？',
+    lines: `<p><b>${sEsc(store)}</b>　${sEsc(rec['營業日'])}　${money(rec['金額'])}　${rec['筆數']} 筆</p>
+      <div class="alert-box">取消後這一天會變回「還在營業」，新增來店單的預設日期也會跳回
+        <b>${sEsc(rec['營業日'])}</b>。銷售資料完全不受影響，只是把日結那一筆標成取消。</div>`,
+    okText: '確定，取消日結'
+  });
+  if (!ok) return;
+  try {
+    const col = colLetter(CLOSE_HEAD.indexOf('備註'));
+    await writeRanges([{ range: `'${SALES.CLOSE_SHEET}'!${col}${rec._row}`,
+      values: [[`${nowStr()} ${userName()} 取消日結`]] }]);
+    const idCol = colLetter(CLOSE_HEAD.indexOf('id'));
+    await writeRanges([{ range: `'${SALES.CLOSE_SHEET}'!${idCol}${rec._row}`, values: [['']] }]);
+    await loadSales(); renderShopLog();
+    toast('已取消日結', 'ok');
+  } catch (err) { alert('失敗：\n' + err.message); }
 }
