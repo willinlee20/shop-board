@@ -237,8 +237,9 @@ function renderSales() {
 function todayBrief() {
   const t = todayStr();
   const all = [];
+  // 收起（封存）過的單就不要再出現在今日銷售，跟各自的清單一致
   for (const k of Object.keys(SH_HEAD)) {
-    SALE.rows[k].filter(r => String(r['訂單日期']) === t).forEach(r => all.push(r));
+    unsettled(k).filter(r => String(r['訂單日期']) === t).forEach(r => all.push(r));
   }
   if (!all.length) return `<div class="empty">今天還沒有銷售紀錄</div>`;
 
@@ -1385,13 +1386,17 @@ function recvCard(r, kind) {
   const shipped = String(r['寄件狀態']) === SALES.SHIP[1]
     || SALES.RETURN_PICK.includes(String(r['取貨狀態']))
     || SALES.DONE_PICK.includes(String(r['取貨狀態']));
-  const canReturn = shipped && !returned && !voided2;
-  const canVoid = !shipped && !returned && !voided2;
-  const canClose = (paid && SALES.DONE_PICK.includes(String(r['取貨狀態']))) || returned;
   const na = v => String(v) === SALES.NA;
-  return `<div class="rec-card" data-id="${sEsc(r.id)}" data-row="${r._row}">
+  const dead = returned || voided2;
+  // 小賣自取的單沒有寄件／取貨（都是 N/A），付完就算完成了
+  const pickDone = SALES.DONE_PICK.includes(String(r['取貨狀態'])) || na(r['取貨狀態']);
+  const canReturn = shipped && !dead;
+  const canVoid = !shipped && !dead;
+  const canClose = dead || (paid && pickDone);
+  return `<div class="rec-card${dead ? ' is-void' : ''}" data-id="${sEsc(r.id)}" data-row="${r._row}">
     <div class="rec-top">
       <span class="who2">${sEsc(who || '（未填）')}</span>
+      ${dead ? `<span class="tag tag-cancel">${sEsc(r['狀態'])}</span>` : ''}
       <span class="pill-pay ${paid ? 'yes' : 'no'}">${sEsc(r['結帳狀態'] || '未結帳')}</span>
       <span class="amt">${money(r['價格'])}${Number(r['運費']) ? ` <span style="font-size:12px;font-weight:400;color:var(--ink-3)">+運 ${money(r['運費'])}</span>` : ''}</span>
     </div>
@@ -1499,16 +1504,21 @@ function wireRecv(kind) {
 
     const close = card.querySelector('[data-recclose]');
     if (close) close.onclick = async () => {
+      const gone = String(r['狀態']) === SALES.VOID || String(r['狀態']) === SALES.RETURNED;
       const ok = await confirmModal({
-        title: '確認這筆已經完成？',
-        lines: `<p><b>${sEsc(kind === 'dist' ? r['經銷名稱'] : r['客戶名稱'] || r['銷售小賣'])}</b>　${money(r['價格'])}</p>
-          <p style="font-size:14px;color:var(--ink-2)">結帳狀態：<b>${sEsc(r['結帳狀態'])}</b>　取貨狀態：<b>${sEsc(r['取貨狀態'])}</b></p>
-          <div class="alert-box">收起後這筆<b>不會再顯示在應收待結</b>，但試算表的資料完整保留，「查詢」也查得到。</div>`,
+        title: gone ? '把這筆收起來？' : '確認這筆已經完成？',
+        lines: `<p><b>${sEsc(kind === 'dist' ? r['經銷名稱'] : r['客戶名稱'] || r['銷售小賣'])}</b>　${money(r['價格'])}　${sEsc(r['訂單日期'])}</p>
+          <p style="font-size:14px;color:var(--ink-2)">${gone
+            ? `目前狀態：<b>${sEsc(r['狀態'])}</b>`
+            : `結帳狀態：<b>${sEsc(r['結帳狀態'])}</b>　取貨狀態：<b>${sEsc(r['取貨狀態'])}</b>`}</p>
+          <div class="alert-box">收起後這筆<b>不會再顯示在應收待結和今日銷售</b>，但試算表的資料完整保留，「查詢」也查得到。${
+            gone ? '庫存在作廢／退貨入庫的時候就已經處理完了，收起不會再動庫存。' : ''}</div>`,
         okText: '確定，收起'
       });
       if (!ok) return;
       try {
-        await patchSale(kind, r, { 封存: '是', 結帳確認者: r['結帳確認者'] || (userName() + ' ' + nowStr()) });
+        await patchSale(kind, r, gone ? { 封存: '是' }
+          : { 封存: '是', 結帳確認者: r['結帳確認者'] || (userName() + ' ' + nowStr()) });
         await loadSales(); reRenderRecv(kind); toast('已收起', 'ok');
       } catch (err) { alert('失敗：\n' + err.message); }
     };
