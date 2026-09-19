@@ -5,8 +5,8 @@
    ========================================================================= */
 
 /* ----------------------------- 版本 ------------------------------------ */
-const APP_VERSION = '3.3';          // 每次改版都會更新，畫面右上角看得到
-const APP_DATE = '2026-09-18';
+const APP_VERSION = '3.5';          // 每次改版都會更新，畫面右上角看得到
+const APP_DATE = '2026-09-19';
 
 /* ----------------------------- 設定區 -----------------------------------
    要改的東西都在這裡，下面的程式不用動。
@@ -51,9 +51,12 @@ const CONFIG = {
   POLL_SECONDS: 45          // 每幾秒自動抓一次新留言
 };
 
-const TYPES = { ORDER: '客戶預訂單', STOCKUP: '備貨', TASK: '任務交接', ROUTINE: '例行工作' };
+const TYPES = { ORDER: '客戶預訂單', STOCKUP: '備貨', SCRAP: '報廢', TASK: '任務交接', ROUTINE: '例行工作' };
 const STATUS = { OPEN: '待處理', DONE: '已完成', CANCEL: '已取消' };
-const STOCK = { RESERVED: '已預留', SHIPPED: '已出庫', TRANSFERRED: '已轉入門市', RESTORED: '已還原', FAILED: '未扣', NA: '不適用' };
+const STOCK = { RESERVED: '已預留', SHIPPED: '已出庫', TRANSFERRED: '已轉入門市', RESTORED: '已還原',
+                SCRAPPED: '已報廢扣除', UNSCRAPPED: '報廢已復原', FAILED: '未扣', NA: '不適用' };
+/** 報廢原因：選一個最接近的，細節寫在說明欄 */
+const SCRAP_REASONS = ['破損／瑕疵', '過期', '試抽／教育訓練', '遺失／短少', '客訴換貨', '盤點差異', '其他'];
 
 const BOARD_HEADERS = [
   'id', '類型', '建立時間', '建立者', '門市', '狀態',
@@ -571,9 +574,11 @@ async function applyPlan(plan, mode, dest) {
     } else if (mode === 'transfer' || mode === 'restore') {
       add(row, CONFIG.H.reserve, -p.qty);
       add(row, dest || src, +p.qty);
-    } else if (mode === 'sell') {          // 銷售單：直接從來源扣掉（不經過預定專區）
+    } else if (mode === 'sell' || mode === 'scrap') {
+      // 銷售單 / 報廢：直接從來源扣掉（不經過預定專區），總數會真的變少
       add(row, src, -p.qty);
-    } else if (mode === 'unsell') {        // 退貨入庫 / 銷售單作廢
+    } else if (mode === 'unsell' || mode === 'unscrap') {
+      // 退貨入庫 / 銷售單作廢 / 報廢復原：原路加回去
       add(row, src, +p.qty);
     }
   }
@@ -678,6 +683,8 @@ function planText(plan, mode, dest) {
     if (mode === 'reserve') return `・${name} ×${p.qty}　${src} −${p.qty} → 預定專區 +${p.qty}`;
     if (mode === 'ship') return `・${name} ×${p.qty}　預定專區 −${p.qty}（出庫，總數減少）`;
     if (mode === 'sell') return `・${name} ×${p.qty}　${src} −${p.qty}（出售，總數減少）`;
+    if (mode === 'scrap') return `・${name} ×${p.qty}　${src} −${p.qty}（報廢，總數減少）`;
+    if (mode === 'unscrap') return `・${name} ×${p.qty}　${src} +${p.qty}（報廢復原，加回去）`;
     if (mode === 'unsell') return `・${name} ×${p.qty}　${src} +${p.qty}（回補庫存）`;
     return `・${name} ×${p.qty}　預定專區 −${p.qty} → ${srcLabel(dest || p.src)} +${p.qty}`;
   }).join('\n');
@@ -695,8 +702,11 @@ function render() {
   // 待備貨：依日期排序
   const stockups = open.filter(r => r['類型'] === TYPES.STOCKUP)
     .sort((a, b) => String(a['取貨日期']).localeCompare(String(b['取貨日期'])));
+  // 報廢正常情況下送出就完成了，會留在這裡的都是「庫存還沒扣成功」的，要醒目
+  const scraps = open.filter(r => r['類型'] === TYPES.SCRAP).reverse();
   // 交接事項：最新的在最上面
-  const notes = open.filter(r => r['類型'] !== TYPES.ORDER && r['類型'] !== TYPES.STOCKUP).reverse();
+  const notes = open.filter(r => r['類型'] !== TYPES.ORDER && r['類型'] !== TYPES.STOCKUP
+    && r['類型'] !== TYPES.SCRAP).reverse();
   const closed = rows.filter(r => r['狀態'] !== STATUS.OPEN).reverse().slice(0, 40);
 
   $('pendingCount').textContent = `待處理 ${open.length}`;
@@ -710,6 +720,9 @@ function render() {
   }
   if (stockups.length) {
     html += `<div class="sec-title">待備貨（${stockups.length}）· 依日期排序</div>` + stockups.map(cardHTML).join('');
+  }
+  if (scraps.length) {
+    html += `<div class="sec-title">報廢：庫存還沒扣成功（${scraps.length}）· 請處理</div>` + scraps.map(cardHTML).join('');
   }
   if (notes.length) {
     html += `<div class="sec-title">交接事項 / 例行工作（${notes.length}）</div>` + notes.map(cardHTML).join('');
@@ -725,7 +738,7 @@ function parseJSON(s, fb) { try { return JSON.parse(s); } catch (e) { return fb;
 function cardHTML(r) {
   const t = r['類型'], done = r['狀態'] !== STATUS.OPEN;
   const tagCls = t === TYPES.ORDER ? 'tag-order' : t === TYPES.STOCKUP ? 'tag-stock'
-    : t === TYPES.TASK ? 'tag-task' : 'tag-routine';
+    : t === TYPES.SCRAP ? 'tag-scrap' : t === TYPES.TASK ? 'tag-task' : 'tag-routine';
   let title = '', body = '';
 
   if (t === TYPES.ORDER) {
@@ -770,6 +783,29 @@ function cardHTML(r) {
     } else if (!done && r['庫存狀態'] === STOCK.RESERVED) {
       body += `<div class="note">貨已經從來源移到「預定專區」等著送出。實際送到門市後按「備貨完成」，就會轉進 ${esc(r['門市'])} 的庫存（總數不變）。</div>`;
     }
+  } else if (t === TYPES.SCRAP) {
+    const items = parseJSON(r['品項JSON'], []);
+    const pieces = items.reduce((s, i) => s + (Number(i.qty) || 0), 0);
+    const from = [...new Set(items.map(i => srcLabel(i.src)))].join('、') || '原來源';
+    title = `報廢 ${pieces} 件`;
+    body = `<dl class="kv">
+        <dt>報廢日期</dt><dd><b>${esc(r['取貨日期'] || '—')}</b></dd>
+        <dt>報廢原因</dt><dd><b>${esc(r['客戶來源'] || '—')}</b></dd>
+        ${r['備註'] ? `<dt>說明</dt><dd>${esc(r['備註'])}</dd>` : ''}
+      </dl>
+      <div class="items">
+        ${items.map(i => `<div class="it"><b>${esc(i.name)}${i.spec ? '　' + esc(i.spec) : ''}</b>
+            <span class="src">${esc(srcLabel(i.src))} 扣</span><span>× ${i.qty}</span></div>`).join('')}
+        <div class="it sum"><span>共報廢</span><span>${pieces} 件</span></div>
+      </div>`;
+    if (r['庫存狀態'] === STOCK.FAILED) {
+      body += `<div class="note bad">⚠ 這張報廢單的庫存<b>還沒扣成功</b>（可能是當時網路中斷）。請按下面的「重試扣庫存」。</div>`;
+    } else if (r['庫存狀態'] === STOCK.SCRAPPED) {
+      body += `<div class="note bad">這批貨已經從 <b>${esc(from)}</b> 扣掉了，總數已經減少，而且沒有任何營收。
+        打錯的話按「↩ 復原報廢」可以原路加回去。</div>`;
+    } else if (r['庫存狀態'] === STOCK.UNSCRAPPED) {
+      body += `<div class="note">↩ 這張報廢<b>已經復原</b>，貨已經加回 ${esc(from)}。</div>`;
+    }
   } else if (t === TYPES.TASK) {
     title = '任務交接';
     body = `<div style="white-space:pre-wrap">${esc(r['備註'] || '（無內容）')}</div>`;
@@ -798,7 +834,17 @@ function cardHTML(r) {
 
   const edit = `<button class="btn btn-sm" data-act="edit" data-id="${esc(r.id)}">✎ 修改</button>`;
   let actions = '';
-  if (!done) {
+  if (t === TYPES.SCRAP) {
+    // 報廢沒有「修改」——改數字等於改庫存，太容易出錯。要改就先復原，再重開一張
+    if (r['庫存狀態'] === STOCK.FAILED) {
+      actions = `<button class="btn btn-sm btn-primary" data-act="retry" data-id="${esc(r.id)}">重試扣庫存</button>
+        <button class="btn btn-sm btn-danger" data-act="cancel" data-id="${esc(r.id)}">取消這張報廢單</button>`;
+    } else if (r['庫存狀態'] === STOCK.SCRAPPED) {
+      actions = `<button class="btn btn-sm btn-danger" data-act="unscrap" data-id="${esc(r.id)}">↩ 復原報廢（庫存加回）</button>`;
+    } else if (r['狀態'] === STATUS.CANCEL) {
+      actions = `<button class="btn btn-sm btn-danger" data-act="del" data-id="${esc(r.id)}">🗑 刪除這筆紀錄</button>`;
+    }
+  } else if (!done) {
     if (t === TYPES.STOCKUP) {
       actions = r['庫存狀態'] === STOCK.FAILED
         ? `<button class="btn btn-sm btn-primary" data-act="retry" data-id="${esc(r.id)}">重試扣庫存</button>
@@ -876,10 +922,13 @@ document.addEventListener('click', async e => {
     const plan = normPlan(parseJSON(r['庫存異動JSON'], []));
     const reserved = r['庫存狀態'] === STOCK.RESERVED;
     const isStock = r['類型'] === TYPES.STOCKUP;
+    const isScrap = r['類型'] === TYPES.SCRAP;
     const backHome = [...new Set(plan.map(p => srcLabel(p.src)))].join('、') || '原來源';
     const res = await confirmModal({
-      title: isStock ? '要取消這張備貨單嗎？' : '要取消這張預訂單嗎？',
-      lines: `<p>${isStock ? '備貨去向：<b>' + esc(r['門市']) + '</b>' : '客戶：<b>' + esc(r['客戶名稱'] || '（無）') + '</b>'}</p>` +
+      title: isScrap ? '要取消這張報廢單嗎？' : isStock ? '要取消這張備貨單嗎？' : '要取消這張預訂單嗎？',
+      lines: `<p>${isScrap ? '報廢原因：<b>' + esc(r['客戶來源'] || '—') + '</b>'
+                : isStock ? '備貨去向：<b>' + esc(r['門市']) + '</b>'
+                : '客戶：<b>' + esc(r['客戶名稱'] || '（無）') + '</b>'}</p>` +
         (reserved
           ? `<p style="color:var(--ink-2);font-size:14px">預定專區的貨要退回哪裡？（預設退回原來源：${esc(backHome)}）</p>`
           : `<p style="color:var(--ink-2);font-size:14px">這張單的庫存還沒扣，取消不會動到庫存。</p>`),
@@ -896,11 +945,13 @@ document.addEventListener('click', async e => {
     await doAction(b, async () => {
       if (reserved) await applyPlan(plan, 'restore', res.dest || null);
       await updateBoardRow(r, {
-        狀態: STATUS.CANCEL, 完成時間: nowStr(), 完成者: userName(), 庫存狀態: STOCK.RESTORED,
+        狀態: STATUS.CANCEL, 完成時間: nowStr(), 完成者: userName(),
+        // 本來就沒扣成功的單（庫存狀態＝未扣）不要假裝「已還原」，維持原樣才看得出真相
+        庫存狀態: reserved ? STOCK.RESTORED : (r['庫存狀態'] || STOCK.NA),
         修改紀錄: (r['修改紀錄'] ? r['修改紀錄'] + '\n' : '')
-          + `${nowStr()} ${userName()}：取消${isStock ? '備貨' : '預訂'}，庫存退回 ${res.dest ? srcLabel(res.dest) : backHome}`
+          + `${nowStr()} ${userName()}：取消${isScrap ? '報廢' : isStock ? '備貨' : '預訂'}${reserved ? `，庫存退回 ${res.dest ? srcLabel(res.dest) : backHome}` : '（庫存未動）'}`
       });
-      toast('已取消，庫存已退回 ' + (res.dest ? srcLabel(res.dest) : backHome), 'ok');
+      toast(reserved ? '已取消，庫存已退回 ' + (res.dest ? srcLabel(res.dest) : backHome) : '已取消（庫存未動）', 'ok');
     });
   }
 
@@ -916,9 +967,13 @@ document.addEventListener('click', async e => {
            <p style="color:var(--ink-2);font-size:14px">這張是送貨提醒單，<b>不會動到庫存</b>。
            貨還是留在「預定專區」，等客人來取貨時，請到那張預訂單按「確認取貨完成」。</p>`
         : `<p>去向：<b>${esc(r['門市'])}</b></p>
-           <p style="color:var(--ink-2);font-size:14px">按下確定後，這些貨會從「預定專區」轉進 ${esc(r['門市'])} 的庫存。
-           <b>總數不會變</b>，只是換了位置。</p>
-           <pre class="pre">${esc(planText(plan, 'transfer', dest))}</pre>`,
+           ${!plan.length && r['庫存狀態'] === STOCK.RESERVED
+             ? `<div class="warn-box">⚠ 這張單標著「已預留」，但<b>沒有記錄當初扣了哪些貨</b>（庫存異動JSON 是空的）。<br>
+                 按下確定只會把單子標成完成，<b>庫存不會有任何變動</b>，「預定專區」那些數量會留在原地。<br>
+                 請先找負責人確認這批貨當初是怎麼扣的，再決定要不要按。</div>`
+             : `<p style="color:var(--ink-2);font-size:14px">按下確定後，這些貨會從「預定專區」轉進 ${esc(r['門市'])} 的庫存。
+                 <b>總數不會變</b>，只是換了位置。</p>
+                <pre class="pre">${esc(planText(plan, 'transfer', dest))}</pre>`}`,
       okText: linked ? '確定，已送達' : '確定，已入庫'
     });
     if (!ok) return;
@@ -940,10 +995,39 @@ document.addEventListener('click', async e => {
   }
 
   if (act === 'retry') {
+    const scrap = r['類型'] === TYPES.SCRAP;
     await doAction(b, async () => {
-      await applyPlan(parseJSON(r['庫存異動JSON'], []), 'reserve');
-      await updateBoardRow(r, { 庫存狀態: STOCK.RESERVED });
-      toast('庫存已預留完成', 'ok');
+      await applyPlan(parseJSON(r['庫存異動JSON'], []), scrap ? 'scrap' : 'reserve');
+      await updateBoardRow(r, scrap
+        ? { 狀態: STATUS.DONE, 完成時間: nowStr(), 完成者: userName(), 庫存狀態: STOCK.SCRAPPED }
+        : { 庫存狀態: STOCK.RESERVED });
+      toast(scrap ? '報廢庫存已扣除' : '庫存已預留完成', 'ok');
+    });
+  }
+
+  // 報廢打錯了：把貨原路加回去，單子標成已取消
+  if (act === 'unscrap') {
+    const plan = normPlan(parseJSON(r['庫存異動JSON'], []));
+    if (!plan.length) return alert('這張報廢單沒有記錄扣了哪些貨，沒辦法自動復原。請找負責人手動調整庫存。');
+    const ok = await confirmModal({
+      title: '復原這張報廢單？',
+      lines: `<p>原因：<b>${esc(r['客戶來源'] || '—')}</b>　${esc(r['取貨日期'] || '')}　${esc(r['門市'])}</p>
+        <p style="font-size:14px;color:var(--ink-2)">按下確定後，這些貨會<b>原路加回庫存</b>：</p>
+        <pre class="pre">${esc(planText(plan, 'unscrap'))}</pre>
+        <div class="alert-box">請先確認<b>貨真的還在、也清點過了</b>再按。按錯的話庫存會多算。
+          復原後這張報廢單會標成「已取消」留在紀錄裡。</div>`,
+      okText: '確定，復原報廢',
+      danger: true
+    });
+    if (!ok) return;
+    await doAction(b, async () => {
+      await applyPlan(plan, 'unscrap');
+      await updateBoardRow(r, {
+        狀態: STATUS.CANCEL, 完成時間: nowStr(), 完成者: userName(), 庫存狀態: STOCK.UNSCRAPPED,
+        修改紀錄: (r['修改紀錄'] ? r['修改紀錄'] + '\n' : '')
+          + `${nowStr()} ${userName()}：復原報廢，庫存已加回`
+      });
+      toast('已復原報廢，庫存已加回', 'ok');
     });
   }
 
@@ -1059,7 +1143,7 @@ async function updateBoardRow(r, patch) {
   await writeRanges(data);
 }
 
-/* ----------------------------- 新增留言表單 ---------------------------- */
+/* ----------------------------- 新增作業表單 ---------------------------- */
 let FORM = null;
 
 function openForm(editId) {
@@ -1098,6 +1182,7 @@ function openForm(editId) {
     FORM = {
       editId: null, type: TYPES.ORDER, store: CONFIG.STORES[0].label,
       source: CONFIG.SOURCES[0], slot: CONFIG.SLOTS[0], routines: [],
+      reason: SCRAP_REASONS[0],
       items: [newItem()], groups: [newGroup()]
     };
   }
@@ -1106,14 +1191,14 @@ function openForm(editId) {
   host.innerHTML = `<div class="modal" id="modal">
     <div class="sheet">
       <div class="sheet-head">
-        <h2>${r ? '修改' + esc(FORM.type) : '新增留言'}</h2>
+        <h2>${r ? '修改' + esc(FORM.type) : '新增作業'}</h2>
         <button class="btn btn-ghost" id="closeForm">✕</button>
       </div>
       <div class="sheet-body">
         ${r ? `<div class="edit-hint">正在修改 ${esc(r['建立者'])} 於 ${esc(r['建立時間'])} 建立的這筆留言。<br>
-                 送出後會記錄「${esc(userName())}」修改了哪些欄位。留言類型不能更改。</div>`
+                 送出後會記錄「${esc(userName())}」修改了哪些欄位。作業類型不能更改。</div>`
             : `<div class="field">
-                 <label>留言類型</label>
+                 <label>作業類型</label>
                  <div class="chips" id="typeChips">
                    ${Object.values(TYPES).map(t => `<button class="chip ${t === TYPES.ORDER ? 'on' : ''}" data-type="${t}">${t}</button>`).join('')}
                  </div>
@@ -1128,7 +1213,7 @@ function openForm(editId) {
       </div>
       <div class="sheet-foot">
         <button class="btn" id="cancelForm">取消</button>
-        <button class="btn btn-primary" id="submitForm">${r ? '儲存修改' : '送出留言'}</button>
+        <button class="btn btn-primary" id="submitForm">${r ? '儲存修改' : '送出作業'}</button>
       </div>
     </div></div>`;
 
@@ -1176,6 +1261,36 @@ function renderFormBody() {
     FORM.date = FORM.date || todayStr();
     $('fDate').oninput = e => FORM.date = e.target.value;
     $('fNote').oninput = e => FORM.note = e.target.value;
+    $('addGroup').onclick = () => { FORM.groups.push(newGroup()); renderGroups(); };
+    renderGroups();
+    return;
+  }
+
+  // ───── 報廢：負向扣庫存，送出就直接從來源扣掉，不經過預定專區 ─────
+  if (FORM.type === TYPES.SCRAP) {
+    b.innerHTML = `
+      <div class="scrap-warn">⚠ 報廢是<b>直接把貨從庫存扣掉</b>
+        <span>總數會真的變少，而且沒有任何營收。請先清點確認，再送出。按錯了可以在卡片上「復原報廢」把貨加回去。</span></div>
+      <div class="field"><label>報廢日期 <span class="req">*</span></label>
+        <input type="date" id="fDate" value="${FORM.date || todayStr()}"></div>
+      <div class="field"><label>報廢原因 <span class="req">*</span></label>
+        <div class="chips" id="scrapChips">
+          ${SCRAP_REASONS.map(x => `<button class="chip${x === FORM.reason ? ' on' : ''}" data-reason="${esc(x)}">${esc(x)}</button>`).join('')}
+        </div></div>
+      <div class="field"><label>報廢品項 <span class="req">*</span></label>
+        <div id="groupRows"></div>
+        <button class="btn add-item" id="addGroup">＋ 增加另一個產品</button>
+        <div class="total-bar"><span>合計</span><span id="gTotal">0 項 · 0 件</span></div>
+      </div>
+      <div class="field"><label>說明 <span class="req">*</span></label>
+        <textarea id="fNote" placeholder="例如：客人退回的煙彈外盒進水，無法再販售">${esc(FORM.note || '')}</textarea></div>`;
+    FORM.date = FORM.date || todayStr();
+    $('fDate').oninput = e => FORM.date = e.target.value;
+    $('fNote').oninput = e => FORM.note = e.target.value;
+    b.querySelectorAll('#scrapChips .chip').forEach(c => c.onclick = () => {
+      FORM.reason = c.dataset.reason;
+      b.querySelectorAll('#scrapChips .chip').forEach(x => x.classList.toggle('on', x === c));
+    });
     $('addGroup').onclick = () => { FORM.groups.push(newGroup()); renderGroups(); };
     renderGroups();
     return;
@@ -1342,7 +1457,7 @@ function renderGroups() {
         </select>
       </div>
       ${specs}
-      <div class="f" style="margin-top:10px"><label>這批從哪裡出貨</label>
+      <div class="f" style="margin-top:10px"><label>${FORM.type === TYPES.SCRAP ? '從哪裡扣掉這批貨' : '這批從哪裡出貨'}</label>
         <select class="gSrc">
           ${srcOptions().map(o => `<option value="${esc(o.col)}"${src === o.col ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}
         </select>
@@ -1531,6 +1646,22 @@ async function submitForm() {
       ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, price: 0, src: p.src })));
     f['庫存異動JSON'] = JSON.stringify(plan.map(p =>
       ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, src: p.src })));
+  } else if (t === TYPES.SCRAP) {
+    if (FORM.editId) return alert('報廢單不能修改。如果打錯了，請在卡片上按「↩ 復原報廢」把庫存加回去，再重開一張。');
+    if (!FORM.date) return alert('請選擇報廢日期');
+    if (!FORM.reason) return alert('請選擇報廢原因');
+    if (!(FORM.note || '').trim()) return alert('請填寫說明：報廢會直接扣庫存，一定要寫清楚原因，之後盤點才查得到');
+    const items = itemsFromGroups(FORM.groups);
+    if (!items.length) return alert('請填寫報廢數量：選好產品名稱後，在要報廢的規格後面填數字');
+    plan = planReserve(items);                 // 只是拿來解析品項＋算來源夠不夠，扣法另外走 scrap
+    f['取貨日期'] = FORM.date;
+    f['客戶來源'] = FORM.reason;               // 借「客戶來源」欄位存報廢原因，不用動試算表
+    f['備註'] = (FORM.note || '').trim();
+    f['品項明細'] = plan.map(p => `${p.name} ${p.spec} ×${p.qty}（${srcLabel(p.src)}扣）`).join('\n');
+    f['品項JSON'] = JSON.stringify(plan.map(p =>
+      ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, price: 0, src: p.src })));
+    f['庫存異動JSON'] = JSON.stringify(plan.map(p =>
+      ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, src: p.src })));
   } else {
     if (!(FORM.cName || '').trim()) return alert('請填寫客戶名稱');
     if (!FORM.date) return alert('請選擇預計取貨日期');
@@ -1571,6 +1702,57 @@ async function submitForm() {
     : '';
 
   /* ══════════════ 新增 ══════════════ */
+  /* ── 報廢：確認 → 寫一列 → 直接從來源扣掉（不進預定專區） ── */
+  if (!editing && t === TYPES.SCRAP) {
+    const ok = await confirmModal({
+      title: '確認報廢這些貨？',
+      lines: `<div class="alert-box big">⚠ 報廢會<b>直接把貨從庫存扣掉</b>
+          <span>總數會真的變少，而且沒有任何營收。請確認貨已經清點過、真的不能再賣了。</span></div>
+        <p style="font-size:14px;color:var(--ink-2)">原因：<b>${esc(FORM.reason)}</b>　日期：<b>${esc(FORM.date)}</b>　門市：<b>${esc(FORM.store)}</b></p>
+        <pre class="pre">${esc(planText(plan, 'scrap'))}</pre>
+        <p style="font-size:14px;color:var(--ink-2)">說明：${esc((FORM.note || '').trim())}</p>
+        ${shortHTML}
+        <div class="alert-box">送出後這張單會直接記成<b>已完成</b>。按錯了可以在卡片上按
+          「<b>↩ 復原報廢</b>」，貨會原路加回去。</div>`,
+      okText: '確定，報廢扣庫存',
+      danger: true
+    });
+    if (!ok) return;
+
+    const id = 'M' + Date.now().toString(36).toUpperCase();
+    const values = new Array(BOARD_HEADERS.length).fill('');
+    values[C['id']] = id;
+    values[C['類型']] = t;
+    values[C['建立時間']] = nowStr();
+    values[C['建立者']] = userName();
+    values[C['狀態']] = STATUS.OPEN;           // 扣成功才改已完成
+    values[C['庫存狀態']] = STOCK.FAILED;
+    Object.keys(f).forEach(k => { if (C[k] !== undefined) values[C[k]] = f[k]; });
+
+    S.busy = true; btn.disabled = true; btn.textContent = '送出中…';
+    try {
+      await appendRow(S.boardTitle, values);
+      try {
+        await applyPlan(plan, 'scrap');
+        await loadBoard();
+        const nr = S.board.find(x => x.id === id);
+        if (nr) await updateBoardRow(nr, {
+          狀態: STATUS.DONE, 完成時間: nowStr(), 完成者: userName(), 庫存狀態: STOCK.SCRAPPED
+        });
+      } catch (err) {
+        alert('報廢單已建立，但庫存還沒扣成功：\n' + err.message + '\n\n請在卡片上按「重試扣庫存」。');
+      }
+      closeForm();
+      await refreshAll('已報廢，庫存已扣除');
+    } catch (err) {
+      alert('送出失敗：\n\n' + err.message);
+    } finally {
+      S.busy = false;
+      if ($('submitForm')) { btn.disabled = false; btn.textContent = '送出作業'; }
+    }
+    return;
+  }
+
   if (!editing) {
     let wantStockup = null;              // 要不要順便開一張「從總倉調度」的備貨單
     if (plan) {
@@ -1626,12 +1808,12 @@ async function submitForm() {
         catch (err) { alert('預訂單已送出，但自動開立備貨單失敗：\n' + err.message + '\n\n請手動開一張備貨單。'); }
       }
       closeForm();
-      await refreshAll(wantStockup ? '已送出，並開了一張備貨單' : '留言已送出');
+      await refreshAll(wantStockup ? '已送出，並開了一張備貨單' : '已送出');
     } catch (err) {
       alert('送出失敗：\n\n' + err.message);
     } finally {
       S.busy = false;
-      if ($('submitForm')) { btn.disabled = false; btn.textContent = '送出留言'; }
+      if ($('submitForm')) { btn.disabled = false; btn.textContent = '送出作業'; }
     }
     return;
   }

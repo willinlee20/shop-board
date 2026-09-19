@@ -48,11 +48,12 @@ const SALES = {
 const SH_HEAD = {
   shop: ['id', '訂單日期', '建立時間', '建立者', '門市', '負責業務', '品項明細', '金額', '成本',
          '備註', '品項JSON', '庫存異動JSON', '庫存狀態', '關聯單號', '狀態',
-         '最後修改時間', '最後修改者', '修改紀錄', '封存', '收款方式'],
+         '最後修改時間', '最後修改者', '修改紀錄', '封存', '收款方式', '折扣', '未折金額'],
   online: ['id', '訂單日期', '建立時間', '建立者', '客戶名稱', '電話', '訂單內容', '價格', '運費', '成本',
            '收款方式', '寄送方式', '店名',
            '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '備註',
-           '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態', '庫存狀態'],
+           '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態', '庫存狀態',
+           '折扣', '未折金額', '會計確認', '會計確認者'],
   mini: ['id', '訂單日期', '建立時間', '建立者', '銷售小賣', '客戶名稱', '小賣自取', '電話', '取貨方式',
          '訂單內容', '價格', '運費', '成本', '寄送方式', '店名',
          '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '獎金', '備註',
@@ -78,6 +79,7 @@ const SALE = {
   titles: {},               // kind → 分頁名稱
   rows: { shop: [], online: [], mini: [], dist: [] },
   closes: [],               // 日結紀錄（每間門市每天一筆）
+  pickStage: null,          // 網路應收待結的階段篩選（null＝全部）
   lists: { staff: [], mini: [], dist: [] },
   form: null,
   loaded: false
@@ -191,6 +193,27 @@ function costOf(items) {
 }
 const itemsText = items => items.map(i => `${i.name} ${i.spec} ×${i.qty}`).join('\n');
 const itemsTotal = items => items.reduce((s, i) => s + (i.qty * (i.price || 0)), 0);
+
+/* ---- 折扣：只有來店、網路單有。一律是「直接減多少錢」，不是打幾折 ----
+   試算表的「金額 / 價格」存的是<b>折扣後</b>的銷貨金額，
+   另外用「未折金額」留下折扣前的合計，出納和報表都不必再自己算。      */
+const HAS_DISCOUNT = k => k === 'shop' || k === 'online';
+/** 表單上的折扣：不能是負的，也不能大於商品合計（銷貨金額不會變負數） */
+function discountOf(gross) {
+  const f = SALE.form;
+  if (!f || !HAS_DISCOUNT(f.kind)) return 0;
+  return Math.min(Math.max(0, Math.round(Number(f.discount) || 0)), Math.max(0, gross));
+}
+/** 已存檔那一列的折扣 */
+const rowDisc = r => Math.max(0, Number(r['折扣']) || 0);
+/** 卡片上那一行「商品合計 → 折扣 → 銷貨金額」，沒折扣就不顯示 */
+function discLine(r, amtKey) {
+  const d = rowDisc(r);
+  if (!d) return '';
+  const net = Number(r[amtKey]) || 0;
+  const gross = Number(r['未折金額']) || (net + d);
+  return `<div class="disc-line">商品合計 ${money(gross)}　折扣 <b>− ${money(d)}</b>　→　銷貨金額 <b>${money(net)}</b></div>`;
+}
 
 /** 把品項補上 name/spec（從庫存表查） */
 function fillItems(list, src) {
@@ -374,7 +397,7 @@ function openSaleForm(kind) {
     kind, date: kind === 'shop' ? openDay(store0) : todayStr(), staff: defaultStaff(),
     store: store0,
     items: [newSaleItem()], groups: [newDistGroup()],
-    cName: '', tel: '', note: '', fee: '', payStatus: SALES.PAY[0], payDate: '',
+    cName: '', tel: '', note: '', fee: '', discount: '', payStatus: SALES.PAY[0], payDate: '',
     collect: SALES.COLLECT_COD,        // 網路單預設貨到付款
     payWay: SALES.PAYWAY[0],           // 來店單：現金／匯款
     noStock: '',                       // 網路單庫存處理：'' = 扣總倉；agent／order = 不扣
@@ -558,10 +581,18 @@ function payWayField() {
 }
 
 function itemsBlock() {
+  const f = SALE.form;
+  const disc = HAS_DISCOUNT(f.kind) ? `
+    <div class="disc-row">
+      <span class="dl">折扣<i>直接減多少錢，沒折扣就留空</i></span>
+      ${numIn('fDisc', f.discount, '0')}
+    </div>
+    <div class="total-bar net" id="netBar"><span>銷貨金額</span><span id="saleNet">NT$0</span></div>` : '';
   return `<div class="field"><label>訂單內容 <span class="req">*</span></label>
     <div id="saleItems"></div>
     <button class="btn add-item" id="addSaleItem">＋ 增加品項</button>
-    <div class="total-bar"><span>金額合計</span><span id="saleTotal">NT$0</span></div></div>`;
+    <div class="total-bar"><span>金額合計</span><span id="saleTotal">NT$0</span></div>
+    ${disc}</div>`;
 }
 function distBlock() {
   return `<div class="field"><label>訂單內容 <span class="req">*</span></label>
@@ -586,6 +617,7 @@ function wireSaleBody() {
   document.querySelectorAll('.fDistTel').forEach(el => el.oninput = e => f.distTel = e.target.value);
   document.querySelectorAll('.fRTel').forEach(el => el.oninput = e => f.rTel = e.target.value);
   document.querySelectorAll('.fFee').forEach(el => el.oninput = e => f.fee = e.target.value);
+  document.querySelectorAll('.fDisc').forEach(el => el.oninput = e => { f.discount = e.target.value; saleTotal(); });
 
   document.querySelectorAll('#storeChips2 .chip').forEach(c => c.onclick = () => {
     f.store = c.dataset.store;
@@ -769,8 +801,12 @@ function saleItemList() {
     .map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, price: i.price })), src);
 }
 function saleTotal() {
+  const gross = itemsTotal(saleItemList()), d = discountOf(gross);
   const el = $('saleTotal');
-  if (el) el.textContent = money(itemsTotal(saleItemList()));
+  if (el) el.textContent = money(gross);
+  const ne = $('saleNet'), bar = $('netBar');
+  if (ne) ne.textContent = money(gross - d);
+  if (bar) bar.classList.toggle('has', d > 0);
 }
 
 /* ----------------------------- 送出銷售單 ------------------------------ */
@@ -796,7 +832,8 @@ async function submitSale() {
     const p = S.products.byRow.get(i.row);
     return p && i.qty > (p.nums[src] || 0);
   });
-  const total = itemsTotal(items), cost = costOf(items);
+  const gross = itemsTotal(items), disc = discountOf(gross), total = gross - disc;
+  const cost = costOf(items);
 
   const ok = await confirmModal({
     title: `確認這張${SALES.LABEL[k]}銷售單`,
@@ -806,7 +843,10 @@ async function submitSale() {
            <p style="font-size:14px;color:var(--ink-2)">這張單的內容：</p>`
         : `<p style="font-size:14px;color:var(--ink-2)">送出後會直接從 <b>${sEsc(srcLabel(src))}</b> 扣掉庫存（總數減少）：</p>`}
       <pre class="pre">${esc(items.map(i => `・${i.name} ${i.spec} ×${i.qty}　${money(i.price * i.qty)}`).join('\n'))}</pre>
-      <p style="font-size:15px"><b>合計 ${money(total)}</b>${f.fee ? `　運費 ${money(f.fee)}` : ''}</p>
+      ${disc
+        ? `<p style="font-size:15px">合計 ${money(gross)}　折扣 <b style="color:var(--danger,#dc2626)">− ${money(disc)}</b><br>
+             <b style="font-size:17px">銷貨金額 ${money(total)}</b>${f.fee ? `　運費 ${money(f.fee)}` : ''}</p>`
+        : `<p style="font-size:15px"><b>合計 ${money(total)}</b>${f.fee ? `　運費 ${money(f.fee)}` : ''}</p>`}
       ${k === 'shop' ? `<p style="font-size:14px;color:var(--ink-2)">收款方式：<b>${sEsc(f.payWay)}</b></p>` : ''}
       ${k === 'dist' ? `<p style="font-size:14px;color:var(--ink-2)">寄送方式：<b>${sEsc(f.dSendWay)}</b><br>
         ${f.dSendWay === SALES.HOME_DELIVERY
@@ -836,6 +876,8 @@ async function submitSale() {
     set('庫存異動JSON', noStock ? '[]'
       : JSON.stringify(items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, src }))));
     set('庫存狀態', noStock ? `不扣（${tags.join('、')}）` : '已扣庫存');
+
+    if (HAS_DISCOUNT(k)) { set('折扣', disc || ''); set('未折金額', gross); }
 
     if (k === 'shop') {
       set('門市', f.store); set('品項明細', itemsText(items)); set('金額', total);
@@ -905,6 +947,7 @@ window.createShopSaleFromOrder = async function (r) {
   set('門市', r['門市']); set('負責業務', defaultStaff());
   set('品項明細', items.map(i => `${i.name} ${i.spec} ×${i.qty}`).join('\n'));
   set('金額', Number(r['金額']) || 0);
+  set('未折金額', Number(r['金額']) || 0);        // 預訂單沒有折扣欄位，兩個一樣
   set('成本', costOf(items.map(i => ({ row: i.row, qty: i.qty }))));
   set('備註', `由預訂單「${r['客戶名稱'] || ''}」（${r.id}）自動產生。實際出貨來源：${srcs}。`);
   set('品項JSON', r['品項JSON']);
@@ -980,6 +1023,11 @@ function shopPerf() {
       return sum ? `<div class="perf-row"><span class="pk">收款</span><span class="pv">
         <i><b>現金</b> ${money(cash)}</i><i><b>匯款</b> ${money(sum - cash)}</i></span></div>` : '';
     })()}
+    ${(() => {
+      const dis = inRange.reduce((t, r) => t + rowDisc(r), 0);
+      return dis ? `<div class="perf-row"><span class="pk">折扣</span><span class="pv">
+        <i><b>共減</b> ${money(dis)}</i><i><b>未折</b> ${money(sum + dis)}</i></span></div>` : '';
+    })()}
     ${sum ? `<div class="perf-row"><span class="pk">毛利</span><span class="pv"><i>${money(sum - cost)}　<b style="font-weight:400;color:var(--ink-3)">成本 ${money(cost)}</b></i></span></div>` : ''}
   </div>`;
 }
@@ -1001,6 +1049,7 @@ function shopCard(r) {
     <div class="rec-items">${items.length
       ? items.map(i => `${sEsc(i.name)} ${sEsc(i.spec)} ×${i.qty}　${money((i.price || 0) * i.qty)}`).join('<br>')
       : sEsc(r['品項明細'] || '（無明細）')}</div>
+    ${discLine(r, '金額')}
     ${r['備註'] ? `<div class="rec-meta">備註：${sEsc(r['備註'])}</div>` : ''}
     ${linked ? `<div class="note">🔗 由預訂單 ${sEsc(r['關聯單號'])} 自動產生，<b>不扣庫存</b>。品項要改請回留言板改那張預訂單。</div>` : ''}
     ${voided ? `<div class="note">已作廢，庫存${parseJSON(r['庫存異動JSON'], []).length ? '已退回' : '本來就沒扣'}。</div>` : ''}
@@ -1074,6 +1123,7 @@ function openSaleEdit(kind, r) {
   f.staff = r['負責業務'] || '';
   f.note = r['備註'] || '';
   f.fee = r['運費'] === '' || r['運費'] === undefined ? '' : String(r['運費']);
+  f.discount = rowDisc(r) ? String(rowDisc(r)) : '';
   // 同樣要用「名稱＋規格」找回產品，不能信單子上記的列號
   const lost = [];
   const list = items.map(i => {
@@ -1178,11 +1228,15 @@ function shopDiff(r, f, items) {
   cmp('負責業務', r['負責業務'], f.staff);
   cmp('備註', r['備註'], f.note.trim());
   const oldT = itemsText(parseJSON(r['品項JSON'], []));
-  void 0;
   const newT = itemsText(items);
   if (oldT !== newT) out.push(`品項：\n${oldT || '（空）'}\n→\n${newT}`);
+  const gross = itemsTotal(items);
+  if (HAS_DISCOUNT(k)) {
+    const nd = discountOf(gross);
+    if (rowDisc(r) !== nd) out.push(`折扣：${money(rowDisc(r))} → ${money(nd)}`);
+  }
   const amtKey = f.kind === 'shop' ? '金額' : '價格';
-  const oldA = Number(r[amtKey]) || 0, newA = itemsTotal(items);
+  const oldA = Number(r[amtKey]) || 0, newA = gross - (HAS_DISCOUNT(k) ? discountOf(gross) : 0);
   if (oldA !== newA) out.push(`${amtKey}：${money(oldA)} → ${money(newA)}`);
   return out;
 }
@@ -1225,12 +1279,15 @@ async function submitShopEdit() {
   try {
     if (hasDelta) await applySaleDelta(oldPlan, newPlan);
 
-    const total = itemsTotal(items);
+    const gross = itemsTotal(items);
+    const disc = HAS_DISCOUNT(k) ? discountOf(gross) : 0;
+    const total = gross - disc;
     const patch = {
       訂單日期: f.date, 負責業務: f.staff, 備註: f.note.trim(), 成本: costOf(items),
       品項JSON: JSON.stringify(items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, price: i.price }))),
       庫存異動JSON: frozen ? '[]' : JSON.stringify(newPlan)
     };
+    if (HAS_DISCOUNT(k)) { patch['折扣'] = disc || ''; patch['未折金額'] = gross; }
     if (k === 'shop') {
       Object.assign(patch, {
         門市: f.store, 品項明細: itemsText(items), 金額: total, 收款方式: f.payWay,
@@ -1387,26 +1444,68 @@ function renderRecv(kind) {
     b.onclick = () => renderRecvOne(kind, b.dataset.who));
 }
 
+/* ---- 網路單的階段狀態 ----------------------------------------------
+   同一張單可能同時卡在兩個階段（例如又沒寄出、又沒結帳），
+   所以這是「要注意什麼」的篩選，不是把單子切成互斥的三堆。        */
+const accDone  = r => String(r['會計確認']) === '是';
+/** 貨態全部跑完了（已結帳 ＋ 已取件／已送達），只差會計確認 */
+const accReady = r => String(r['結帳狀態']) === '已結帳'
+  && SALES.DONE_PICK.includes(String(r['取貨狀態']));
+
+const PICK_STAGES = [
+  { key: 'ship', label: '① 未處理', sub: '未寄出',
+    hit: r => liveOrder(r) && String(r['寄件狀態']) === SALES.SHIP[0] },
+  { key: 'wait', label: '② 未取件', sub: '已寄出 · 包裹異常 · 退貨路上',
+    hit: r => liveOrder(r) && String(r['寄件狀態']) === SALES.SHIP[1]
+      && !SALES.DONE_PICK.includes(String(r['取貨狀態'])) },
+  { key: 'pay', label: '③ 未結帳', sub: '錢還沒收到',
+    hit: r => liveOrder(r) && String(r['結帳狀態']) !== '已結帳' },
+  { key: 'acc', label: '④ 待會計確認', sub: '貨態都完成了',
+    hit: r => liveOrder(r) && accReady(r) && !accDone(r) }
+];
+const stageOf = key => PICK_STAGES.find(s => s.key === key) || null;
+
 /** 網路應收待結：一張單一張卡，直接在這裡撿貨、改狀態 */
 function renderPickList(kind, name) {
   // 撿貨用的排序：還沒寄的排最前面，再來是寄出待取，作廢／退貨沉到最底
   const rank = r => !liveOrder(r) ? 3
     : String(r['寄件狀態']) === SALES.SHIP[0] ? 0
       : SALES.DONE_PICK.includes(String(r['取貨狀態'])) ? 2 : 1;
-  const rows = unsettled(kind).slice().sort((a, b) =>
+  const all = unsettled(kind).slice().sort((a, b) =>
     rank(a) - rank(b) || String(a['訂單日期']).localeCompare(String(b['訂單日期'])));
-  const open = rows.filter(r => String(r['結帳狀態']) !== '已結帳' && liveOrder(r));
+
+  const st = stageOf(SALE.pickStage);
+  const rows = st ? all.filter(st.hit) : all;
+
+  const open = all.filter(r => String(r['結帳狀態']) !== '已結帳' && liveOrder(r));
   const owe = open.reduce((s, r) => s + owedOf(r), 0);
-  const toShip = rows.filter(r => String(r['寄件狀態']) === SALES.SHIP[0] && liveOrder(r)).length;
+
+  const chips = `<div class="stage-bar">
+      <button class="stg${st ? '' : ' on'}" data-stage="">全部<i>${all.length}</i></button>
+      ${PICK_STAGES.map(s => {
+        const n = all.filter(s.hit).length;
+        return `<button class="stg${st && st.key === s.key ? ' on' : ''}${n ? '' : ' zero'}"
+          data-stage="${s.key}">${s.label}<i>${n}</i><em>${sEsc(s.sub)}</em></button>`;
+      }).join('')}
+    </div>`;
 
   $('salesView').innerHTML = backBar(name + '應收待結') +
-    (rows.length ? `
+    (all.length ? `
       <div class="pick-sum">
-        <span>${rows.length} 張單${toShip ? `　·　<b class="warn">${toShip} 張待寄</b>` : ''}</span>
+        <span>${all.length} 張單</span>
         <span>未結 <b>${money(owe)}</b></span>
       </div>
-      ${rows.map(r => pickCard(r, kind)).join('')}`
+      ${chips}
+      ${rows.length
+        ? `${st ? `<div class="stage-note">目前只看「${sEsc(st.label)}${sEsc(st.sub ? '：' + st.sub : '')}」，共 ${rows.length} 張</div>` : ''}
+           ${rows.map(r => pickCard(r, kind)).join('')}`
+        : `<div class="empty">這個階段目前沒有單子 🎉</div>`}`
       : `<div class="empty">目前沒有待處理的${name}訂單 🎉</div>`);
+
+  document.querySelectorAll('.stage-bar .stg').forEach(b => b.onclick = () => {
+    SALE.pickStage = b.dataset.stage || null;
+    renderPickList(kind, name);
+  });
   wireRecv(kind);
 }
 
@@ -1422,8 +1521,17 @@ function pickCard(r, kind) {
     || SALES.DONE_PICK.includes(String(r['取貨狀態']));
   const canReturn = shipped && !dead;
   const canVoid = !shipped && !dead;
-  const canClose = (paid && SALES.DONE_PICK.includes(String(r['取貨狀態']))) || dead;
+  const ready = accReady(r);                    // 已結帳＋已取件 → 可以會計確認
   const noStock = String(r['庫存狀態'] || '').startsWith('不扣');
+  // 進度條：寄出 → 取件 → 結帳 → 會計確認，一眼看出還缺哪一關
+  const steps = [
+    ['寄出', String(r['寄件狀態']) === SALES.SHIP[1]],
+    ['取件', SALES.DONE_PICK.includes(String(r['取貨狀態']))],
+    ['結帳', paid],
+    ['會計', accDone(r)]
+  ];
+  const flow = dead ? '' : `<div class="flow">${steps.map(([t, ok], n) =>
+    `<span class="fs${ok ? ' ok' : ''}">${ok ? '✓' : n + 1}　${t}</span>`).join('<i>›</i>')}</div>`;
   const chips = (field, list, cur) => `<div class="pick-row">
       <span class="pl">${field}</span>
       <span class="pc">${list.map(o => `<button type="button" class="pchip${String(cur) === o ? ' on' : ''}"
@@ -1440,6 +1548,7 @@ function pickCard(r, kind) {
     <div class="pick-sub">${sEsc(r['訂單日期'])} · ${sEsc(r.id)} · ${sEsc(r['負責業務'] || '—')}${r['電話'] ? ' · ' + sEsc(r['電話']) : ''}</div>
 
     <div class="pick-items">${sEsc(r['訂單內容'] || '（無品項）')}</div>
+    ${discLine(r, '價格')}
     ${noStock ? `<div class="pick-flag">🚫 ${sEsc(r['庫存狀態'])}　貨還沒進來，不要撿貨</div>` : ''}
     ${r['備註'] ? `<div class="pick-note">備註：${sEsc(r['備註'])}</div>` : ''}
 
@@ -1455,6 +1564,8 @@ function pickCard(r, kind) {
     </div>
     ${chips('取貨狀態', SALES.PICK, r['取貨狀態'])}
     ${chips('結帳狀態', SALES.PAY, r['結帳狀態'])}
+    ${flow}
+    ${!dead && ready ? `<div class="acct-ready">✅ 寄件、取件、結帳都完成了，等<b>會計確認</b>結案</div>` : ''}
 
     <div class="rec-foot">
       <span class="meta">${r['結帳確認者'] ? '結帳：' + sEsc(r['結帳確認者']) : ''}</span>
@@ -1462,7 +1573,9 @@ function pickCard(r, kind) {
       ${dead ? '' : `<button class="btn btn-sm" data-recedit="1">✎ 改單</button>`}
       ${canReturn ? `<button class="btn btn-sm btn-danger" data-recreturn="1">↩ 退貨入庫</button>` : ''}
       ${canVoid ? `<button class="btn btn-sm btn-danger" data-recvoid="1">🗑 訂單作廢</button>` : ''}
-      ${canClose ? `<button class="btn btn-sm btn-ok" data-recclose="1">✓ 完成並收起</button>` : ''}
+      ${dead
+        ? `<button class="btn btn-sm btn-ok" data-recclose="1">✓ 收起</button>`
+        : ready ? `<button class="btn btn-sm btn-ok" data-recacct="1">✅ 會計確認（結案）</button>` : ''}
     </div></div>`;
 }
 
@@ -1520,6 +1633,7 @@ function recvCard(r, kind) {
       ${r['電話'] && !na(r['電話']) ? '　·　' + sEsc(r['電話']) : ''}
       ${kind === 'dist' ? `　·　${sEsc((String(r['寄送方式']) === SALES.HOME_DELIVERY ? r['宅配地址'] : r['收貨門市']) || '')} ${sEsc(r['收貨人'] || '')} ${sEsc(r['收貨人電話'] || '')}` : ''}</div>
     <div class="rec-items">${sEsc(r['訂單內容'] || '')}</div>
+    ${discLine(r, '價格')}
     ${r['備註'] ? `<div class="rec-meta">備註：${sEsc(r['備註'])}</div>` : ''}
     <div class="st-grid">
       <div><label>寄件狀態</label><select class="rSel" data-f="寄件狀態">${opts([SALES.NA].concat(SALES.SHIP), r['寄件狀態'])}</select></div>
@@ -1637,6 +1751,37 @@ function wireRecv(kind) {
           : { 封存: '是', 結帳確認者: r['結帳確認者'] || (userName() + ' ' + nowStr()) });
         await loadSales(); reRenderRecv(kind); toast('已收起', 'ok');
       } catch (err) { alert('失敗：\n' + err.message); }
+    };
+
+    // 網路單的最後一關：會計核對完帳，按了才結案（從清單消失）
+    const acct = card.querySelector('[data-recacct]');
+    if (acct) acct.onclick = async () => {
+      const ok = await confirmModal({
+        title: '會計確認，這張單結案？',
+        lines: `<p><b>${sEsc(r['客戶名稱'] || '（未填）')}</b>　${money(r['價格'])}${
+            Number(r['運費']) ? `　＋運 ${money(r['運費'])}` : ''}　${sEsc(r['訂單日期'])}　${sEsc(r.id)}</p>
+          <pre class="pre">寄件狀態　${sEsc(r['寄件狀態'] || '')}
+取貨狀態　${sEsc(r['取貨狀態'] || '')}
+結帳狀態　${sEsc(r['結帳狀態'] || '')}${rowDisc(r) ? `
+折扣　　　− ${money(rowDisc(r))}（未折 ${money(Number(r['未折金額']) || (Number(r['價格']) || 0) + rowDisc(r))}）` : ''}
+應收合計　${money(owedOf(r))}</pre>
+          <div class="alert-box">按下去代表<b>會計已經核對過這張單的帳</b>。確認後這張單
+            <b>會從「網路應收待結」消失</b>，試算表會記下確認的人和時間，「查詢」永遠查得到。<br>
+            如果金額或狀態有問題，<b>先不要按</b>，請直接改單或找開單的同仁。</div>`,
+        okText: '確定，會計確認結案'
+      });
+      if (!ok) return;
+      acct.disabled = true; acct.textContent = '處理中…';
+      try {
+        await patchSale(kind, r, {
+          會計確認: '是', 會計確認者: userName() + ' ' + nowStr(), 封存: '是',
+          結帳確認者: r['結帳確認者'] || (userName() + ' ' + nowStr())
+        });
+        await loadSales(); reRenderRecv(kind); toast('已會計確認，這張單結案', 'ok');
+      } catch (err) {
+        alert('失敗：\n' + err.message);
+        acct.disabled = false; acct.textContent = '✅ 會計確認（結案）';
+      }
     };
   });
 }
@@ -1874,6 +2019,7 @@ function dayStats(store, day) {
     a + ((!pick || payWayOf(r) === pick) ? (Number(r[f]) || 0) : 0), 0);
   return {
     n: rows.length, amount: sum('金額'), cost: sum('成本'),
+    disc: rows.reduce((a, r) => a + rowDisc(r), 0),
     cash: sum('金額', '現金'), bank: sum('金額', '匯款'),
     voided: SALE.rows.shop.filter(r =>
       r['門市'] === store && String(r['訂單日期']) === String(day) && shopVoided(r)).length
@@ -1898,6 +2044,7 @@ function todayPanel() {
         <span>現金 <b>${money(d.cash)}</b></span>
         <span>匯款 <b>${money(d.bank)}</b></span>
         ${d.amount ? `<span>毛利 <b>${money(d.amount - d.cost)}</b></span>` : ''}
+        ${d.disc ? `<span class="v">折扣 −${money(d.disc)}</span>` : ''}
         ${d.voided ? `<span class="v">作廢 ${d.voided} 筆</span>` : ''}
       </div>
       <div class="dp-foot">
@@ -1922,7 +2069,7 @@ async function closeDay(store) {
   const ok = await confirmModal({
     title: `${store}　${day}　本日營業結束？`,
     lines: `<pre class="pre">筆數　${d.n} 筆${d.voided ? `（另有 ${d.voided} 筆已作廢，不計入）` : ''}
-營業額　${money(d.amount)}
+營業額　${money(d.amount)}${d.disc ? `（已扣折扣 ${money(d.disc)}）` : ''}
 　現金　${money(d.cash)}
 　匯款　${money(d.bank)}
 成本　${money(d.cost)}
