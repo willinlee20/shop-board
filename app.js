@@ -5,8 +5,8 @@
    ========================================================================= */
 
 /* ----------------------------- 版本 ------------------------------------ */
-const APP_VERSION = '3.5';          // 每次改版都會更新，畫面右上角看得到
-const APP_DATE = '2026-09-19';
+const APP_VERSION = '3.6';          // 每次改版都會更新，畫面右上角看得到
+const APP_DATE = '2026-09-20';
 
 /* ----------------------------- 設定區 -----------------------------------
    要改的東西都在這裡，下面的程式不用動。
@@ -63,10 +63,13 @@ const BOARD_HEADERS = [
   '客戶名稱', '客戶來源', '取貨日期', '取貨時段',
   '品項明細', '金額', '備註', '例行工作項目',
   '完成時間', '完成者', '品項JSON', '庫存異動JSON', '庫存狀態',
-  '最後修改時間', '最後修改者', '修改紀錄', '關聯單號'
+  '最後修改時間', '最後修改者', '修改紀錄', '關聯單號',
+  '折扣', '未折金額', '收款方式'
 ];
 const C = {}; BOARD_HEADERS.forEach((h, i) => C[h] = i);   // 欄位 → 索引
-const BOARD_LAST_COL = 'W';
+const BOARD_LAST_COL = 'Z';
+/** 預訂單的收款方式（跟銷售模組的 SALES.PAYWAY 一致，出納對帳用） */
+const PAY_WAYS = ['現金', '匯款'];
 
 /* ----------------------------- 狀態 ------------------------------------ */
 const S = {
@@ -747,14 +750,16 @@ function cardHTML(r) {
     body = `<dl class="kv">
         <dt>客戶來源</dt><dd>${esc(r['客戶來源'] || '—')}</dd>
         <dt>取貨時間</dt><dd><b>${esc(r['取貨日期'] || '—')}</b>　${esc(r['取貨時段'] || '')}</dd>
+        <dt>收款方式</dt><dd><b>${esc(ordPayWay(r))}</b></dd>
         ${r['備註'] ? `<dt>備註</dt><dd>${esc(r['備註'])}</dd>` : ''}
       </dl>
       <div class="items">
         ${items.map(i => `<div class="it"><b>${esc(i.name)}${i.spec ? '　' + esc(i.spec) : ''}</b>
             ${i.src ? `<span class="src">${esc(srcLabel(i.src))} 出</span>` : ''}
             <span>× ${i.qty}</span><span>${money(i.price * i.qty)}</span></div>`).join('')}
-        <div class="it sum"><span>合計</span><span>${money(r['金額'])}</span></div>
-      </div>`;
+        <div class="it sum"><span>${ordDisc(r) ? '銷貨金額' : '合計'}</span><span>${money(r['金額'])}</span></div>
+      </div>
+      ${ordDisc(r) ? `<div class="disc-line">商品合計 ${money(Number(r['未折金額']) || (Number(r['金額']) || 0) + ordDisc(r))}　折扣 <b>− ${money(ordDisc(r))}</b>　→　銷貨金額 <b>${money(r['金額'])}</b></div>` : ''}`;
     if (r['庫存狀態'] === STOCK.FAILED) {
       body += `<div class="note bad">⚠ 這張單的庫存還沒扣成功（可能是當時網路中斷）。請按下面的「重試扣庫存」。</div>`;
     } else if (!done && r['庫存狀態'] === STOCK.RESERVED) {
@@ -901,6 +906,13 @@ document.addEventListener('click', async e => {
     const ok = await confirmModal({
       title: '確認客人已取貨？',
       lines: `<p>客戶：<b>${esc(r['客戶名稱'])}</b></p>
+              <p style="font-size:15px">應收 <b>${money(r['金額'])}</b>${
+                ordDisc(r) ? `<span style="font-size:13px;font-weight:400;color:var(--ink-3)">（已折 ${money(ordDisc(r))}）</span>` : ''
+              }　·　收款 <b>${esc(ordPayWay(r))}</b></p>
+              ${String(r['建立者'] || '').trim() === userName()
+                ? `<p style="font-size:13.5px;color:var(--ink-3)">業務會記 <b>${esc(userName())}</b>（這張單就是你開的）。</p>`
+                : `<div class="alert-box">業務會記 <b>${esc(r['建立者'] || '（未填）')}</b>（當初開單的人），<b>不是你</b>。
+                    你按確認只是幫忙出貨，系統會另外記下出貨的人是 ${esc(userName())}。</div>`}
               <p style="color:var(--ink-2);font-size:14px">按下確定後會從庫存的「預定專區」扣掉，總數才會真正減少：</p>
               <pre class="pre">${esc(planText(plan, 'ship'))}</pre>`,
       okText: '確定，已取貨'
@@ -1159,6 +1171,8 @@ function openForm(editId) {
       cName: r['客戶名稱'] || '',
       date: r['取貨日期'] || todayStr(),
       note: r['備註'] || '',
+      discount: ordDisc(r) ? String(ordDisc(r)) : '',
+      payWay: ordPayWay(r),
       taskText: r['類型'] === TYPES.TASK ? (r['備註'] || '') : '',
       routines: String(r['例行工作項目'] || '').split('\n').filter(Boolean),
       items: parseJSON(r['品項JSON'], []).map(i => {
@@ -1183,6 +1197,7 @@ function openForm(editId) {
       editId: null, type: TYPES.ORDER, store: CONFIG.STORES[0].label,
       source: CONFIG.SOURCES[0], slot: CONFIG.SLOTS[0], routines: [],
       reason: SCRAP_REASONS[0],
+      discount: '', payWay: PAY_WAYS[0],
       items: [newItem()], groups: [newGroup()]
     };
   }
@@ -1341,11 +1356,27 @@ function renderFormBody() {
       <div id="itemRows"></div>
       <button class="btn add-item" id="addItem">＋ 增加品項</button>
       <div class="total-bar"><span>預訂金額合計</span><span id="fTotal">NT$0</span></div>
+      <div class="disc-row">
+        <span class="dl">折扣<i>直接減多少錢，沒折扣就留空</i></span>
+        <input type="number" inputmode="decimal" id="fDisc" min="0" step="1"
+          value="${esc(FORM.discount ?? '')}" placeholder="0">
+      </div>
+      <div class="total-bar net" id="netBar"><span>銷貨金額</span><span id="fNet">NT$0</span></div>
     </div>
+    <div class="field"><label>收款方式 <span class="req">*</span></label>
+      <div class="chips" id="payWayChips">
+        ${PAY_WAYS.map(p => `<button class="chip ${p === FORM.payWay ? 'on' : ''}" data-v="${p}">${p}</button>`).join('')}
+      </div>
+      <div class="hint-row">取貨結案時會原封帶到來店銷售單，出納靠這個對帳</div></div>
     <div class="field"><label>備註</label>
       <textarea id="fNote" placeholder="例如：客人說會晚點來、要換殼…">${esc(FORM.note || '')}</textarea></div>`;
 
   $('fName').oninput = e => FORM.cName = e.target.value;
+  $('fDisc').oninput = e => { FORM.discount = e.target.value; updateTotal(); };
+  b.querySelectorAll('#payWayChips .chip').forEach(c => c.onclick = () => {
+    FORM.payWay = c.dataset.v;
+    b.querySelectorAll('#payWayChips .chip').forEach(x => x.classList.toggle('on', x === c));
+  });
   $('fDate').oninput = e => FORM.date = e.target.value;
   $('fNote').oninput = e => FORM.note = e.target.value;
   FORM.date = FORM.date || todayStr();
@@ -1614,7 +1645,23 @@ function syncSub(row, it) {
   if (el) el.value = money(it.qty * it.price);
 }
 function formTotal() { return FORM.items.reduce((s, i) => s + (i.qty * i.price), 0); }
-function updateTotal() { const el = $('fTotal'); if (el) el.textContent = money(formTotal()); }
+/** 預訂單的折扣：不能是負的，也不能大於品項合計（銷貨金額不會變負數） */
+function formDisc(gross) {
+  const g = gross === undefined ? formTotal() : gross;
+  return Math.min(Math.max(0, Math.round(Number(FORM.discount) || 0)), Math.max(0, g));
+}
+function updateTotal() {
+  const g = formTotal(), d = formDisc(g);
+  const el = $('fTotal'); if (el) el.textContent = money(g);
+  const ne = $('fNet'); if (ne) ne.textContent = money(g - d);
+  const bar = $('netBar'); if (bar) bar.classList.toggle('has', d > 0);
+}
+// 註：sales.js 另有同名用途的 rowDisc / payWayOf（給銷售分頁用），
+// 兩個檔案共用同一個全域範圍，名字不能撞，所以留言板這邊叫 ordDisc / ordPayWay
+/** 留言板那一列（預訂單）的折扣 */
+const ordDisc = r => Math.max(0, Number(r['折扣']) || 0);
+/** 舊的預訂單沒填收款方式，一律當現金（以前只收現金） */
+const ordPayWay = r => PAY_WAYS.includes(r['收款方式']) ? r['收款方式'] : PAY_WAYS[0];
 
 async function submitForm() {
   const btn = $('submitForm');
@@ -1670,11 +1717,16 @@ async function submitForm() {
     if (!items.length) return alert('請選擇預訂品項：先選「產品名稱」，再選「產品規格」');
 
     plan = planReserve(items);
+    const gross = formTotal(), disc = formDisc(gross);
     f['客戶名稱'] = FORM.cName.trim();
     f['客戶來源'] = FORM.source;
     f['取貨日期'] = FORM.date;
     f['取貨時段'] = FORM.slot;
-    f['金額'] = formTotal();
+    // 「金額」一律存折扣後的銷貨金額，另存未折金額，跟銷售單同一套規則
+    f['金額'] = gross - disc;
+    f['折扣'] = disc;              // 沒折扣就寫 0（不是空白），修改紀錄才看得懂「250 → 0」
+    f['未折金額'] = gross;
+    f['收款方式'] = FORM.payWay || PAY_WAYS[0];
     f['備註'] = (FORM.note || '').trim();
     f['品項明細'] = plan.map(p => `${p.name} ${p.spec} ×${p.qty}（${srcLabel(p.src)}出）`).join('\n');
     f['品項JSON'] = JSON.stringify(plan.map(p =>
@@ -1769,7 +1821,15 @@ async function submitForm() {
                 <pre class="pre">${esc(planText(plan, 'reserve'))}</pre>
                 <p style="color:var(--ink-2);font-size:14px">${isStock
                   ? '等貨實際送到 <b>' + esc(FORM.store) + '</b> 後，按「備貨完成」就會轉進該門市的庫存。'
-                  : '客人取貨按「確認取貨完成」時，總數才會真正減少。'}</p>${shortHTML}`,
+                  : '客人取貨按「確認取貨完成」時，總數才會真正減少。'}</p>
+                ${isStock ? '' : (() => {
+                  const g = Number(f['未折金額']) || 0, d = Number(f['折扣']) || 0;
+                  return `<p style="font-size:15px">${d
+                    ? `合計 ${money(g)}　折扣 <b style="color:var(--bad)">− ${money(d)}</b><br>
+                       <b style="font-size:17px">銷貨金額 ${money(g - d)}</b>`
+                    : `<b>合計 ${money(g)}</b>`}
+                    　·　收款 <b>${esc(f['收款方式'])}</b></p>`;
+                })()}${shortHTML}`,
         choices: fromWh.length ? {
           name: 'mkStock',
           options: [{ v: '1', label: '同時開一張備貨單（建議）' },
@@ -1821,7 +1881,8 @@ async function submitForm() {
   /* ══════════════ 修改 ══════════════ */
   const LABEL = {
     客戶名稱: '客戶名稱', 客戶來源: '客戶來源',
-    取貨日期: (t === TYPES.STOCKUP ? '備貨日期' : '取貨日期'), 取貨時段: '取貨時段', 金額: '金額',
+    取貨日期: (t === TYPES.STOCKUP ? '備貨日期' : '取貨日期'), 取貨時段: '取貨時段',
+    金額: '銷貨金額', 折扣: '折扣', 收款方式: '收款方式',
     備註: (t === TYPES.TASK ? '交接內容' : '備註'),
     品項明細: '品項', 例行工作項目: '例行工作', 門市: (t === TYPES.STOCKUP ? '備貨去向門市' : '對應門市')
   };

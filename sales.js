@@ -934,6 +934,19 @@ async function submitSale() {
 }
 
 /* --------------- 預訂單取貨完成 → 自動開來店銷售單（不扣庫存） --------- */
+/**
+ * 預訂單的業務＝**當初開單的人**，不是按「確認取貨完成」的人。
+ * 按確認的只是幫忙出貨，業績不該記到他頭上。
+ * 名字對得上業務名單就用名單上的寫法，對不上就照原樣填——
+ * 寧可填一個名單外的名字，也不能默默換成別人。
+ */
+function staffOfOrder(r) {
+  const who = String(r['建立者'] || '').trim();
+  if (!who) return defaultStaff();
+  const hit = SALE.lists.staff.find(x => String(x.name || '').trim() === who);
+  return hit ? hit.name : who;
+}
+
 window.createShopSaleFromOrder = async function (r) {
   if (!SALE.titles.shop) return;
   const items = parseJSON(r['品項JSON'], []);
@@ -942,14 +955,20 @@ window.createShopSaleFromOrder = async function (r) {
   const v = new Array(SH_HEAD[k].length).fill('');
   const set = (key, val) => { v[SH_COL[k][key]] = val; };
   const srcs = [...new Set(items.map(i => srcLabel(i.src || CONFIG.H.warehouse)))].join('、');
+  // 折扣／未折金額／收款方式整組照搬；舊的預訂單沒有這幾欄 → 折扣 0、收款現金
+  const net = Number(r['金額']) || 0;
+  const disc = Math.max(0, Number(r['折扣']) || 0);
+  const gross = Number(r['未折金額']) || (net + disc);
+  const pw = SALES.PAYWAY.includes(r['收款方式']) ? r['收款方式'] : SALES.PAYWAY[0];
+  const staff = staffOfOrder(r);
   set('id', 'X' + Date.now().toString(36).toUpperCase());
   set('訂單日期', todayStr()); set('建立時間', nowStr()); set('建立者', userName());
-  set('門市', r['門市']); set('負責業務', defaultStaff());
+  set('門市', r['門市']); set('負責業務', staff);
   set('品項明細', items.map(i => `${i.name} ${i.spec} ×${i.qty}`).join('\n'));
-  set('金額', Number(r['金額']) || 0);
-  set('未折金額', Number(r['金額']) || 0);        // 預訂單沒有折扣欄位，兩個一樣
+  set('金額', net); set('折扣', disc || ''); set('未折金額', gross); set('收款方式', pw);
   set('成本', costOf(items.map(i => ({ row: i.row, qty: i.qty }))));
-  set('備註', `由預訂單「${r['客戶名稱'] || ''}」（${r.id}）自動產生。實際出貨來源：${srcs}。`);
+  set('備註', `由預訂單「${r['客戶名稱'] || ''}」（${r.id}）自動產生。`
+    + `業務 ${staff || '（未填）'}（開單者），出貨 ${userName()}。實際出貨來源：${srcs}。`);
   set('品項JSON', r['品項JSON']);
   set('庫存異動JSON', '[]');                    // 空的 → 不會再動庫存
   set('庫存狀態', '不扣（來自預訂單）');
