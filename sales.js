@@ -25,11 +25,16 @@ const SALES = {
   VOID: '已作廢',
   PAYWAY: ['現金', '匯款'],          // 來店單的收款方式，出納對帳用
   CLOSE_SHEET: 'DayClose日結',       // 每間門市每天「本日營業結束」的紀錄
-  // 網路單：這兩種情況不扣總倉庫存（貨不是從我們倉庫出的）
+  // 網路單：這兩種情況不扣庫存（貨不是從我們倉庫出的）
   NOSTOCK: [
-    { key: 'agent', label: '本訂單廠商代出（不扣總倉庫存）', tag: '廠商代出' },
-    { key: 'order', label: '非常備商品，待調貨後出貨（不扣總倉庫存）', tag: '待調貨' }
+    { key: 'agent', label: '本訂單廠商代出（不扣庫存）', tag: '廠商代出' },
+    { key: 'order', label: '非常備商品，待調貨後出貨（不扣庫存）', tag: '待調貨' }
   ],
+  // 品項性質：空字串＝正常銷售。這三種是「送出去的貨」——
+  // 庫存照扣（貨真的出去了），但不算營收也不算成本。
+  GIFT: ['保固換貨', '點數換贈', '公關贈品'],
+  // 小賣／經銷：客人自己給寄件代號，我們只要把代號記下來就好
+  CODE_WAY: '收件者提供寄件代號',
 
   SHIP:   ['未寄出', '已寄出'],
   PICK:   ['未取件', '已取件', '已送達', '未送達', '即將退貨', '退貨路上', '包裹異常'],
@@ -184,15 +189,23 @@ function defaultStaff() {
 function staffNames() { return SALE.lists.staff.map(x => x.name); }
 
 /** 一張單的成本合計 */
+/* ---- 品項性質：保固換貨／點數換贈／公關贈品 ----------------------------
+   這三種貨是真的出去了，所以**庫存照扣**，
+   但不是賣掉的——**不算營收、也不算成本**，才不會把毛利算歪。      */
+const isGift = i => SALES.GIFT.includes(String((i && i.gift) || ''));
+const giftOf = i => (isGift(i) ? String(i.gift) : '');
+
 function costOf(items) {
   return items.reduce((sum, it) => {
+    if (isGift(it)) return sum;               // 贈品不計成本
     const p = findProduct(it) || S.products.byRow.get(it.row);
     const c = p ? (p.nums['成本'] || 0) : 0;
     return sum + c * it.qty;
   }, 0);
 }
-const itemsText = items => items.map(i => `${i.name} ${i.spec} ×${i.qty}`).join('\n');
-const itemsTotal = items => items.reduce((s, i) => s + (i.qty * (i.price || 0)), 0);
+const itemsText = items => items.map(i =>
+  `${i.name} ${i.spec} ×${i.qty}${isGift(i) ? `（${i.gift}）` : ''}`).join('\n');
+const itemsTotal = items => items.reduce((s, i) => s + (isGift(i) ? 0 : i.qty * (i.price || 0)), 0);
 
 /* ---- 折扣：只有來店、網路單有。一律是「直接減多少錢」，不是打幾折 ----
    試算表的「金額 / 價格」存的是<b>折扣後</b>的銷貨金額，
@@ -220,9 +233,10 @@ function fillItems(list, src) {
   return list.map(i => {
     // 品項的身分是「名稱＋規格」；列號會因為庫存表插入／刪除列而跑掉，不能拿來認產品
     const p = findProduct(i) || (i.name ? null : S.products.byRow.get(i.row));
+    const g = giftOf(i);
     return p
-      ? { row: p.sheetRow, name: p.name, spec: p.spec, qty: i.qty, price: i.price || 0, src }
-      : { row: i.row, name: i.name || '', spec: i.spec || '', qty: i.qty, price: i.price || 0, src, missing: true };
+      ? { row: p.sheetRow, name: p.name, spec: p.spec, qty: i.qty, price: g ? 0 : (i.price || 0), src, gift: g }
+      : { row: i.row, name: i.name || '', spec: i.spec || '', qty: i.qty, price: g ? 0 : (i.price || 0), src, gift: g, missing: true };
   });
 }
 
@@ -387,7 +401,7 @@ document.addEventListener('click', e => {
 });
 
 /* ----------------------------- 銷售單表單 ------------------------------ */
-function newSaleItem() { return { cat: S.lastCat || null, name: '', row: null, qty: 1, price: 0 }; }
+function newSaleItem() { return { cat: S.lastCat || null, name: '', row: null, qty: 1, price: 0, gift: '' }; }
 function newDistGroup() { return { cat: S.lastCat || null, name: '', qty: {}, price: {} }; }
 
 function openSaleForm(kind) {
@@ -400,9 +414,10 @@ function openSaleForm(kind) {
     cName: '', tel: '', note: '', fee: '', discount: '', payStatus: SALES.PAY[0], payDate: '',
     collect: SALES.COLLECT_COD,        // 網路單預設貨到付款
     payWay: SALES.PAYWAY[0],           // 來店單：現金／匯款
-    noStock: '',                       // 網路單庫存處理：'' = 扣總倉；agent／order = 不扣
+    noStock: '',                       // 網路單庫存處理：'' = 照 onSrc 扣；agent／order = 不扣
+    onSrc: CONFIG.H.warehouse,         // 網路單從哪裡出貨（總倉／三重店／西門店）
     miniName: (SALE.lists.mini[0] || {}).name || '', selfPick: false, pickup: SALES.PICKUP[0],
-    sendWay: SALES.SEND_WAY[0], storeName: '',
+    sendWay: SALES.SEND_WAY[0], storeName: '', shipCode: '',
     distName: (SALE.lists.dist[0] || {}).name || '', distTel: '',
     dSendWay: SALES.DIST_SEND_WAY[0], useDefault: true, rShop: '', rAddr: '', rName: '', rTel: '',
     editRow: null
@@ -434,6 +449,8 @@ function saleSrc() {
   const f = SALE.form;
   if (f.kind === 'shop') return storeCol(f.store);
   if (f.kind === 'mini') return f.pickup === '寄送' ? CONFIG.H.warehouse : storeCol(SALES.PICK_STORE[f.pickup]);
+  // 網路單：同事在「庫存處理」直接選要從哪裡出（總倉／三重／西門）
+  if (f.kind === 'online') return f.onSrc || CONFIG.H.warehouse;
   return CONFIG.H.warehouse;
 }
 /** 網路單勾了「廠商代出」或「待調貨」就不扣庫存 */
@@ -446,6 +463,20 @@ function noStockTags() {
 const skipStock = () => noStockTags().length > 0;
 
 /** 小賣可選的取貨方式：勾了「小賣自取」就沒有寄送 */
+/* ---- 收件者提供寄件代號 -------------------------------------------------
+   小賣／經銷有時候是客人自己開寄件單，把代號給我們。
+   這種情況沒有「我們要寄到哪家店」，只要把代號記下來就好。            */
+const miniWays = () => SALES.SEND_WAY.concat(SALES.CODE_WAY);
+const distWays = () => SALES.DIST_SEND_WAY.concat(SALES.CODE_WAY);
+const byCode = w => String(w) === SALES.CODE_WAY;
+/** 寄件代號欄位（選了「收件者提供寄件代號」才會出現） */
+function codeField() {
+  const f = SALE.form;
+  return `<div class="field"><label>寄件代號 <span class="req">*</span></label>
+    <input type="text" id="fShipCode" value="${sEsc(f.shipCode || '')}" placeholder="客人給的寄件代號／寄件編號">
+    <div class="hint-row">客人自己開的寄件單，代號填這裡就好，不用填店名、收貨門市或地址</div></div>`;
+}
+
 function pickupOptions() {
   const f = SALE.form;
   return f && f.selfPick ? SALES.PICKUP.filter(p => p !== '寄送') : SALES.PICKUP;
@@ -456,17 +487,22 @@ function srcNote() {
 
 /** 網路單：庫存怎麼處理（三選一） */
 function noStockBlock() {
-  const f = SALE.form, cur = f.noStock || '';
+  const f = SALE.form;
+  // 一個單選群組同時管兩件事：從哪裡扣（src:欄位），或是根本不扣（agent／order）
+  const cur = f.noStock ? f.noStock : 'src:' + (f.onSrc || CONFIG.H.warehouse);
   const opt = (key, html) => `<label class="opt${cur === key ? ' on' : ''}">
-      <input type="radio" name="nsMode" value="${key}"${cur === key ? ' checked' : ''}>
+      <input type="radio" name="nsMode" value="${sEsc(key)}"${cur === key ? ' checked' : ''}>
       <span>${html}</span></label>`;
   return `<div class="field">
     <label>庫存處理 <span class="req">*</span></label>
     <div class="opt-list">
-      ${opt('', `這張單的庫存扣在 <b>${sEsc(srcLabel(saleSrc()))}</b>（一般情況）`)}
+      ${srcOptions().map(o => opt('src:' + o.col,
+        `庫存扣在 <b>${sEsc(o.label)}</b>${o.col === CONFIG.H.warehouse ? '（一般情況）' : ''}`)).join('')}
       ${SALES.NOSTOCK.map(o => opt(o.key, sEsc(o.label))).join('')}
     </div>
-    ${skipStock() ? `<div class="opt-warn">🚫 這張單<b>不扣庫存</b>（${sEsc(noStockTags().join('、'))}），只記錄銷售、營收與成本</div>` : ''}
+    ${skipStock()
+      ? `<div class="opt-warn">🚫 這張單<b>不扣庫存</b>（${sEsc(noStockTags().join('、'))}），只記錄銷售、營收與成本</div>`
+      : `<div class="hint-row">貨從 <b>${sEsc(srcLabel(saleSrc()))}</b> 出，送出後就從那裡扣掉；上面品項的庫存數字也是看這裡</div>`}
   </div>`;
 }
 
@@ -539,9 +575,10 @@ function renderSaleBody() {
       + (f.pickup === '寄送' ? `
         <div class="field"><label>寄送方式</label>
           <div class="chips big-chips" id="wayChips">
-            ${SALES.SEND_WAY.map(w => `<button class="chip${w === f.sendWay ? ' on' : ''}" data-way="${w}">${w}</button>`).join('')}
+            ${miniWays().map(w => `<button class="chip${w === f.sendWay ? ' on' : ''}" data-way="${w}">${w}</button>`).join('')}
           </div></div>
-        <div class="field"><label>店名</label><input type="text" id="fStoreName" value="${sEsc(f.storeName)}"></div>
+        ${byCode(f.sendWay) ? codeField()
+          : `<div class="field"><label>店名</label><input type="text" id="fStoreName" value="${sEsc(f.storeName)}"></div>`}
         ${feeField}` : '')
       + payFields + staffField + noteField;
   }
@@ -553,15 +590,17 @@ function renderSaleBody() {
       + distBlock()
       + `<div class="field"><label>寄送方式</label>
           <div class="chips big-chips" id="dwayChips">
-            ${SALES.DIST_SEND_WAY.map(w => `<button class="chip${w === f.dSendWay ? ' on' : ''}" data-dway="${w}">${w}</button>`).join('')}
+            ${distWays().map(w => `<button class="chip${w === f.dSendWay ? ' on' : ''}" data-dway="${w}">${w}</button>`).join('')}
           </div></div>
-        <div class="field">
+        ${byCode(f.dSendWay) ? '' : `<div class="field">
           <label class="check-inline${f.useDefault ? ' on' : ''}"><input type="checkbox" id="fUseDef" ${f.useDefault ? 'checked' : ''}>使用預設收件資料</label>
-        </div>
-        ${f.dSendWay === SALES.HOME_DELIVERY
-          ? `<div class="field"><label>宅配地址 <span class="req">*</span></label>
-              <input type="text" id="fRAddr" value="${sEsc(f.rAddr)}" placeholder="例如：桃園市中壢區○○路 123 號 5 樓"></div>`
-          : `<div class="field"><label>收貨門市</label><input type="text" id="fRShop" value="${sEsc(f.rShop)}"></div>`}
+        </div>`}
+        ${byCode(f.dSendWay)
+          ? codeField()
+          : f.dSendWay === SALES.HOME_DELIVERY
+            ? `<div class="field"><label>宅配地址 <span class="req">*</span></label>
+                <input type="text" id="fRAddr" value="${sEsc(f.rAddr)}" placeholder="例如：桃園市中壢區○○路 123 號 5 樓"></div>`
+            : `<div class="field"><label>收貨門市</label><input type="text" id="fRShop" value="${sEsc(f.rShop)}"></div>`}
         <div class="field"><label>收貨人</label><input type="text" id="fRName" value="${sEsc(f.rName)}"></div>
         <div class="field"><label>收貨人電話</label>${telIn('fRTel', f.rTel)}</div>`
       + feeField + payFields + staffField + noteField;
@@ -610,6 +649,7 @@ function wireSaleBody() {
   on('fCName', 'oninput', e => f.cName = e.target.value);
   on('fPayDate', 'oninput', e => f.payDate = e.target.value);
   on('fStoreName', 'oninput', e => f.storeName = e.target.value);
+  on('fShipCode', 'oninput', e => f.shipCode = e.target.value);
   on('fRShop', 'oninput', e => f.rShop = e.target.value);
   on('fRAddr', 'oninput', e => f.rAddr = e.target.value);
   on('fRName', 'oninput', e => f.rName = e.target.value);
@@ -630,7 +670,11 @@ function wireSaleBody() {
   document.querySelectorAll('#pickChips .chip').forEach(c => c.onclick = () => { f.pickup = c.dataset.pick; renderSaleBody(); });
   document.querySelectorAll('#wayChips .chip').forEach(c => c.onclick = () => { f.sendWay = c.dataset.way; renderSaleBody(); });
   document.querySelectorAll('input[name="nsMode"]').forEach(el => el.onchange = e => {
-    if (e.target.checked) { f.noStock = el.value; renderSaleBody(); }
+    if (!e.target.checked) return;
+    const v = String(el.value);
+    if (v.startsWith('src:')) { f.noStock = ''; f.onSrc = v.slice(4); }
+    else f.noStock = v;
+    renderSaleBody();
   });
   document.querySelectorAll('#collectChips .chip').forEach(c => c.onclick = () => {
     f.collect = c.dataset.collect;
@@ -683,11 +727,19 @@ function renderSaleItems() {
       ${p ? `<div class="stockline${it.qty > have ? ' short' : ''}">${sEsc(srcLabel(saleSrc()))}現有 <b>${have}</b>${it.qty > have ? `　⚠ 不足 ${it.qty - have}` : ''}　·　售價 ${money(p.price)}</div>` : ''}
       <div class="r2">
         <div class="f"><label>數量</label>${qtyIn('itemQty', it.qty, '1', 1)}</div>
-        <div class="f"><label>單價</label>${numIn('itemPrice', it.price, '0')}</div>
+        <div class="f"><label>單價</label>${numIn('itemPrice', isGift(it) ? 0 : it.price, '0', isGift(it) ? 'disabled' : '')}</div>
         <div class="f" style="max-width:110px"><label>小計</label>
-          <input type="text" value="${money(it.qty * it.price)}" readonly style="background:#f1f5f9"></div>
+          <input type="text" value="${money(isGift(it) ? 0 : it.qty * it.price)}" readonly style="background:#f1f5f9"></div>
         ${f.items.length > 1 ? `<button class="del">✕</button>` : ''}
-      </div></div>`;
+      </div>
+      ${f.kind === 'online' ? `<div class="gift-row${isGift(it) ? ' on' : ''}">
+        <span class="gl">性質</span>
+        <select class="itemGift">
+          <option value="">正常銷售</option>
+          ${SALES.GIFT.map(g => `<option value="${sEsc(g)}"${g === (it.gift || '') ? ' selected' : ''}>${sEsc(g)}</option>`).join('')}
+        </select>
+        ${isGift(it) ? `<i class="gt">不算營收、不算成本，庫存照扣</i>` : ''}
+      </div>` : ''}</div>`;
   }).join('');
 
   host.querySelectorAll('.item-row').forEach(row => {
@@ -701,17 +753,25 @@ function renderSaleItems() {
     row.querySelector('.itemName').onchange = e => {
       it.name = e.target.value; it.row = null; it.spec = '';
       const vs = S.products.byName.get(it.name) || [];
-      if (vs.length === 1) { it.row = vs[0].sheetRow; it.price = vs[0].price; it.spec = vs[0].spec; }
+      if (vs.length === 1) { it.row = vs[0].sheetRow; it.price = isGift(it) ? 0 : vs[0].price; it.spec = vs[0].spec; }
       renderSaleItems(); saleTotal();
     };
     row.querySelector('.itemSpec').onchange = e => {
       it.row = +e.target.value || null;
       const p = it.row ? S.products.byRow.get(it.row) : null;
-      if (p) { it.price = p.price; it.cat = p.cat; it.name = p.name; it.spec = p.spec; }
+      if (p) { it.price = isGift(it) ? 0 : p.price; it.cat = p.cat; it.name = p.name; it.spec = p.spec; }
       renderSaleItems(); saleTotal();
     };
     row.querySelector('.itemQty').oninput = e => { it.qty = Math.max(1, +e.target.value || 1); saleTotal(); };
     row.querySelector('.itemPrice').oninput = e => { it.price = Math.max(0, +e.target.value || 0); saleTotal(); };
+    const gf = row.querySelector('.itemGift');
+    if (gf) gf.onchange = e => {
+      it.gift = e.target.value;
+      // 標成贈品就把單價歸零；取消贈品再把售價帶回來，同事不用自己重打
+      if (it.gift) it.price = 0;
+      else { const q = findProduct(it); it.price = q ? q.price : 0; }
+      renderSaleItems(); saleTotal();
+    };
     const d = row.querySelector('.del');
     if (d) d.onclick = () => { f.items.splice(i, 1); renderSaleItems(); saleTotal(); };
   });
@@ -798,7 +858,7 @@ function saleItemList() {
     return fillItems(out, src);
   }
   return fillItems(f.items.filter(i => i.row)
-    .map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, price: i.price })), src);
+    .map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, price: i.price, gift: i.gift || '' })), src);
 }
 function saleTotal() {
   const gross = itemsTotal(saleItemList()), d = discountOf(gross);
@@ -821,6 +881,8 @@ async function submitSale() {
   if (k === 'online' && !f.tel.trim()) return alert('請填寫電話');
   if (k === 'mini' && !f.selfPick && !f.cName.trim()) return alert('請填寫客戶名稱，或勾選「小賣自取」');
   if (k === 'dist' && f.dSendWay === SALES.HOME_DELIVERY && !f.rAddr.trim()) return alert('選擇宅配時請填寫宅配地址');
+  if (((k === 'mini' && f.pickup === '寄送' && byCode(f.sendWay)) || (k === 'dist' && byCode(f.dSendWay)))
+      && !String(f.shipCode || '').trim()) return alert('選了「收件者提供寄件代號」，請填寫客人給的寄件代號');
   const gone = items.filter(i => i.missing);
   if (gone.length) return alert('下面這些品項在庫存表裡找不到，為了避免扣錯庫存，這張單先不送出：\n\n'
     + gone.map(i => `・${i.name} ${i.spec}`).join('\n')
@@ -842,16 +904,18 @@ async function submitSale() {
              <span style="font-weight:400;font-size:13px">貨不是從我們倉庫出的，所以只記錄銷售、營收和成本，庫存數字完全不動。</span></div>
            <p style="font-size:14px;color:var(--ink-2)">這張單的內容：</p>`
         : `<p style="font-size:14px;color:var(--ink-2)">送出後會直接從 <b>${sEsc(srcLabel(src))}</b> 扣掉庫存（總數減少）：</p>`}
-      <pre class="pre">${esc(items.map(i => `・${i.name} ${i.spec} ×${i.qty}　${money(i.price * i.qty)}`).join('\n'))}</pre>
+      <pre class="pre">${esc(items.map(i => `・${i.name} ${i.spec} ×${i.qty}　${isGift(i) ? i.gift + '（不計價）' : money(i.price * i.qty)}`).join('\n'))}</pre>
       ${disc
         ? `<p style="font-size:15px">合計 ${money(gross)}　折扣 <b style="color:var(--danger,#dc2626)">− ${money(disc)}</b><br>
              <b style="font-size:17px">銷貨金額 ${money(total)}</b>${f.fee ? `　運費 ${money(f.fee)}` : ''}</p>`
         : `<p style="font-size:15px"><b>合計 ${money(total)}</b>${f.fee ? `　運費 ${money(f.fee)}` : ''}</p>`}
       ${k === 'shop' ? `<p style="font-size:14px;color:var(--ink-2)">收款方式：<b>${sEsc(f.payWay)}</b></p>` : ''}
       ${k === 'dist' ? `<p style="font-size:14px;color:var(--ink-2)">寄送方式：<b>${sEsc(f.dSendWay)}</b><br>
-        ${f.dSendWay === SALES.HOME_DELIVERY
-          ? `宅配地址：<b>${sEsc(f.rAddr.trim()) || '（未填）'}</b>`
-          : `收貨門市：<b>${sEsc(f.rShop.trim()) || '（未填）'}</b>`}
+        ${byCode(f.dSendWay)
+          ? `寄件代號：<b>${sEsc(String(f.shipCode || '').trim()) || '（未填）'}</b>`
+          : f.dSendWay === SALES.HOME_DELIVERY
+            ? `宅配地址：<b>${sEsc(f.rAddr.trim()) || '（未填）'}</b>`
+            : `收貨門市：<b>${sEsc(f.rShop.trim()) || '（未填）'}</b>`}
         　收貨人：<b>${sEsc(f.rName.trim()) || '（未填）'}</b></p>` : ''}
       ${k === 'online' ? `<p style="font-size:14px;color:var(--ink-2)">寄送方式：<b>${sEsc(f.sendWay)}</b>${f.storeName.trim() ? `　店名：<b>${sEsc(f.storeName.trim())}</b>` : '　（店名未填）'}<br>
         結帳狀態：<b>${sEsc(f.collect)}</b> → 試算表記「<b>${f.collect === SALES.COLLECT_PAID ? '已結帳' : '未結帳'}</b>」</p>` : ''}
@@ -871,7 +935,7 @@ async function submitSale() {
 
     set('id', id); set('訂單日期', f.date); set('建立時間', nowStr()); set('建立者', userName());
     set('負責業務', f.staff); set('備註', f.note.trim()); set('成本', cost); set('狀態', '有效');
-    set('品項JSON', JSON.stringify(items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, price: i.price }))));
+    set('品項JSON', JSON.stringify(items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, price: i.price, gift: i.gift || '' }))));
     // 不扣庫存的單：庫存異動JSON 留空陣列，之後作廢／退貨才不會把貨「還」回去
     set('庫存異動JSON', noStock ? '[]'
       : JSON.stringify(items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, src }))));
@@ -893,6 +957,8 @@ async function submitSale() {
     if (k === 'online') {
       set('客戶名稱', f.cName.trim()); set('電話', f.tel.trim());
       set('寄送方式', f.sendWay); set('店名', f.storeName.trim());
+      // 出納和撿貨都要知道這張單的貨是從哪裡扣的
+      if (!noStock) set('庫存狀態', `已扣庫存（${srcLabel(src)}）`);
       // 前台只選收款方式，結帳狀態由系統推：已收貨款 → 已結帳
       const paidNow = f.collect === SALES.COLLECT_PAID;
       set('收款方式', f.collect);
@@ -905,16 +971,19 @@ async function submitSale() {
       set('小賣自取', f.selfPick ? '是' : '否'); set('電話', isSelf ? na : f.tel.trim());
       set('取貨方式', f.pickup);
       const posting = f.pickup === '寄送';
+      const code = posting && byCode(f.sendWay);      // 客人自己給寄件代號
       set('寄送方式', isSelf ? na : (posting ? f.sendWay : na));
-      set('店名', isSelf ? na : (posting ? f.storeName.trim() : na));
+      set('店名', isSelf ? na : (posting && !code ? f.storeName.trim() : na));
+      if (code) set('寄件代碼', f.shipCode.trim());
       if (isSelf) { set('結帳狀態', f.payStatus); }
     }
     if (k === 'dist') {
       set('經銷名稱', f.distName); set('經銷聯絡電話', f.distTel.trim());
-      const home = f.dSendWay === SALES.HOME_DELIVERY;
+      const home = f.dSendWay === SALES.HOME_DELIVERY, code = byCode(f.dSendWay);
       set('寄送方式', f.dSendWay);
-      set('收貨門市', home ? SALES.NA : f.rShop.trim());
-      set('宅配地址', home ? f.rAddr.trim() : SALES.NA);
+      set('收貨門市', home || code ? SALES.NA : f.rShop.trim());
+      set('宅配地址', home && !code ? f.rAddr.trim() : SALES.NA);
+      if (code) set('寄件代碼', f.shipCode.trim());
       set('收貨人', f.rName.trim()); set('收貨人電話', f.rTel.trim());
     }
 
@@ -1148,10 +1217,11 @@ function openSaleEdit(kind, r) {
   const list = items.map(i => {
     const hit = findProduct(i);
     if (!hit) lost.push(i);
+    const g = giftOf(i);
     return {
       cat: hit ? hit.cat : null, name: hit ? hit.name : i.name,
       spec: hit ? hit.spec : i.spec, row: hit ? hit.sheetRow : i.row,
-      qty: Number(i.qty) || 1, price: Number(i.price) || 0
+      qty: Number(i.qty) || 1, price: g ? 0 : (Number(i.price) || 0), gift: g
     };
   });
   if (lost.length) {
@@ -1177,21 +1247,26 @@ function openSaleEdit(kind, r) {
     const tag = String(r['庫存狀態'] || '');
     const hit = SALES.NOSTOCK.find(o => tag.includes(o.tag));
     f.noStock = hit ? hit.key : '';
+    // 當初從哪裡扣的，改單時要帶回來，不然會扣到別的地方去
+    const p0 = parseJSON(r['庫存異動JSON'], [])[0] || parseJSON(r['品項JSON'], [])[0] || {};
+    f.onSrc = srcOptions().some(o => o.col === p0.src) ? p0.src : CONFIG.H.warehouse;
   }
   if (kind === 'mini') {
     f.miniName = r['銷售小賣'] || (SALE.lists.mini[0] || {}).name || '';
     f.cName = r['客戶名稱'] || ''; f.tel = r['電話'] || '';
     f.selfPick = String(r['小賣自取']) === '是';
     f.pickup = pickupOptions().includes(r['取貨方式']) ? r['取貨方式'] : pickupOptions()[0];
-    f.sendWay = SALES.SEND_WAY.includes(r['寄送方式']) ? r['寄送方式'] : SALES.SEND_WAY[0];
-    f.storeName = r['店名'] || '';
+    f.sendWay = miniWays().includes(r['寄送方式']) ? r['寄送方式'] : SALES.SEND_WAY[0];
+    f.storeName = r['店名'] === SALES.NA ? '' : (r['店名'] || '');
+    f.shipCode = r['寄件代碼'] === SALES.NA ? '' : (r['寄件代碼'] || '');
     f.payStatus = SALES.PAY.includes(r['結帳狀態']) ? r['結帳狀態'] : SALES.PAY[0];
     f.payDate = r['結帳日'] || '';
   }
   if (kind === 'dist') {
     f.distName = r['經銷名稱'] || (SALE.lists.dist[0] || {}).name || '';
     f.distTel = r['經銷聯絡電話'] || '';
-    f.dSendWay = SALES.DIST_SEND_WAY.includes(r['寄送方式']) ? r['寄送方式'] : SALES.DIST_SEND_WAY[0];
+    f.dSendWay = distWays().includes(r['寄送方式']) ? r['寄送方式'] : SALES.DIST_SEND_WAY[0];
+    f.shipCode = r['寄件代碼'] === SALES.NA ? '' : (r['寄件代碼'] || '');
     f.useDefault = false;                       // 修改時不要蓋掉已填的收件資料
     f.rShop = r['收貨門市'] === SALES.NA ? '' : (r['收貨門市'] || '');
     f.rAddr = r['宅配地址'] === SALES.NA ? '' : (r['宅配地址'] || '');
@@ -1232,8 +1307,9 @@ function shopDiff(r, f, items) {
   if (k === 'online' || k === 'mini') { cmp('客戶名稱', r['客戶名稱'], f.cName.trim()); cmp('電話', r['電話'], f.tel.trim()); }
   if (k === 'online') {
     cmp('寄送方式', r['寄送方式'], f.sendWay); cmp('店名', r['店名'], f.storeName.trim());
-    cmp('結帳狀態', r['收款方式'], f.collect);
-    cmp('庫存處理', r['庫存狀態'], skipStock() ? `不扣（${noStockTags().join('、')}）` : '已扣庫存');
+    cmp('收款方式', r['收款方式'], f.collect);
+    cmp('庫存處理', r['庫存狀態'],
+      skipStock() ? `不扣（${noStockTags().join('、')}）` : `已扣庫存（${srcLabel(saleSrc())}）`);
   }
   if (k === 'mini') {
     cmp('銷售小賣', r['銷售小賣'], f.miniName); cmp('取貨方式', r['取貨方式'], f.pickup);
@@ -1303,7 +1379,7 @@ async function submitShopEdit() {
     const total = gross - disc;
     const patch = {
       訂單日期: f.date, 負責業務: f.staff, 備註: f.note.trim(), 成本: costOf(items),
-      品項JSON: JSON.stringify(items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, price: i.price }))),
+      品項JSON: JSON.stringify(items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, price: i.price, gift: i.gift || '' }))),
       庫存異動JSON: frozen ? '[]' : JSON.stringify(newPlan)
     };
     if (HAS_DISCOUNT(k)) { patch['折扣'] = disc || ''; patch['未折金額'] = gross; }
@@ -1319,13 +1395,17 @@ async function submitShopEdit() {
         + `${nowStr()} ${userName()} 修改：${diff.join('；').replace(/\n/g, ' ')}`;
     }
     if (k === 'online') {
+      // 「已收貨款」一定是已結帳；但「貨到付款」不可以把<b>已經收到的錢</b>改回未結帳——
+      // 貨到付款的單本來就是出貨後才收錢，改個地址不該把收款紀錄洗掉。
       const paidNow = f.collect === SALES.COLLECT_PAID;
+      const nowPaid = paidNow || String(r['結帳狀態']) === '已結帳';
       Object.assign(patch, {
         客戶名稱: f.cName.trim(), 電話: f.tel.trim(),
         寄送方式: f.sendWay, 店名: f.storeName.trim(),
-        收款方式: f.collect, 結帳狀態: paidNow ? '已結帳' : '未結帳',
-        結帳日: paidNow ? (f.payDate || f.date) : '',
-        庫存狀態: noStock ? `不扣（${noStockTags().join('、')}）` : '已扣庫存'
+        收款方式: f.collect, 結帳狀態: nowPaid ? '已結帳' : '未結帳',
+        結帳確認者: nowPaid ? (r['結帳確認者'] || userName() + ' ' + nowStr()) : '',
+        結帳日: nowPaid ? (r['結帳日'] || f.payDate || f.date) : '',
+        庫存狀態: noStock ? `不扣（${noStockTags().join('、')}）` : `已扣庫存（${srcLabel(saleSrc())}）`
       });
     }
     if (k === 'mini') {
@@ -1334,16 +1414,18 @@ async function submitShopEdit() {
         銷售小賣: f.miniName, 客戶名稱: f.cName.trim(), 小賣自取: isSelf ? '是' : '否',
         電話: isSelf ? SALES.NA : f.tel.trim(), 取貨方式: f.pickup,
         寄送方式: isSelf ? SALES.NA : (posting ? f.sendWay : SALES.NA),
-        店名: isSelf ? SALES.NA : (posting ? f.storeName.trim() : SALES.NA),
+        店名: isSelf ? SALES.NA : (posting && !byCode(f.sendWay) ? f.storeName.trim() : SALES.NA),
         結帳狀態: f.payStatus, 結帳日: f.payDate
       });
+      if (posting && byCode(f.sendWay)) patch['寄件代碼'] = f.shipCode.trim();
     }
     if (k === 'dist') {
-      const home = f.dSendWay === SALES.HOME_DELIVERY;
+      const home = f.dSendWay === SALES.HOME_DELIVERY, dcode = byCode(f.dSendWay);
+      if (dcode) patch['寄件代碼'] = f.shipCode.trim();
       Object.assign(patch, {
         經銷名稱: f.distName, 經銷聯絡電話: f.distTel.trim(), 寄送方式: f.dSendWay,
-        收貨門市: home ? SALES.NA : f.rShop.trim(),
-        宅配地址: home ? f.rAddr.trim() : SALES.NA,
+        收貨門市: home || dcode ? SALES.NA : f.rShop.trim(),
+        宅配地址: home && !dcode ? f.rAddr.trim() : SALES.NA,
         收貨人: f.rName.trim(), 收貨人電話: f.rTel.trim(),
         結帳狀態: f.payStatus, 結帳日: f.payDate
       });
@@ -1467,6 +1549,8 @@ function renderRecv(kind) {
    同一張單可能同時卡在兩個階段（例如又沒寄出、又沒結帳），
    所以這是「要注意什麼」的篩選，不是把單子切成互斥的三堆。        */
 const accDone  = r => String(r['會計確認']) === '是';
+/** 這張網路單開單時記的收款方式（已收貨款／貨到付款）；舊單沒填就回空字串，不亂猜 */
+const collectOf = r => SALES.COLLECT.includes(r['收款方式']) ? String(r['收款方式']) : '';
 /** 貨態全部跑完了（已結帳 ＋ 已取件／已送達），只差會計確認 */
 const accReady = r => String(r['結帳狀態']) === '已結帳'
   && SALES.DONE_PICK.includes(String(r['取貨狀態']));
@@ -1477,8 +1561,11 @@ const PICK_STAGES = [
   { key: 'wait', label: '② 未取件', sub: '已寄出 · 包裹異常 · 退貨路上',
     hit: r => liveOrder(r) && String(r['寄件狀態']) === SALES.SHIP[1]
       && !SALES.DONE_PICK.includes(String(r['取貨狀態'])) },
-  { key: 'pay', label: '③ 未結帳', sub: '錢還沒收到',
-    hit: r => liveOrder(r) && String(r['結帳狀態']) !== '已結帳' },
+  // 還沒寄出的單本來就還沒到收錢的時候，放進「未結帳」只會讓催款名單失準，
+  // 所以這一段只看**已經寄出去**的單
+  { key: 'pay', label: '③ 未結帳', sub: '已寄出但錢還沒收到',
+    hit: r => liveOrder(r) && String(r['結帳狀態']) !== '已結帳'
+      && String(r['寄件狀態']) === SALES.SHIP[1] },
   { key: 'acc', label: '④ 待會計確認', sub: '貨態都完成了',
     hit: r => liveOrder(r) && accReady(r) && !accDone(r) }
 ];
@@ -1498,13 +1585,18 @@ function renderPickList(kind, name) {
 
   const open = all.filter(r => String(r['結帳狀態']) !== '已結帳' && liveOrder(r));
   const owe = open.reduce((s, r) => s + owedOf(r), 0);
+  const sumOf = list => list.reduce((s, r) => s + owedOf(r), 0);
+  // 會計要的小計：已經跑完全部貨態、等確認結案的那幾張，金額加總
+  const accRows = all.filter(stageOf('acc').hit);
+  const accSum = sumOf(accRows);
 
   const chips = `<div class="stage-bar">
       <button class="stg${st ? '' : ' on'}" data-stage="">全部<i>${all.length}</i></button>
       ${PICK_STAGES.map(s => {
-        const n = all.filter(s.hit).length;
-        return `<button class="stg${st && st.key === s.key ? ' on' : ''}${n ? '' : ' zero'}"
-          data-stage="${s.key}">${s.label}<i>${n}</i><em>${sEsc(s.sub)}</em></button>`;
+        const hits = all.filter(s.hit);
+        return `<button class="stg${st && st.key === s.key ? ' on' : ''}${hits.length ? '' : ' zero'}"
+          data-stage="${s.key}">${s.label}<i>${hits.length}</i><em>${sEsc(s.sub)}</em>
+          ${hits.length ? `<b class="sm">${money(sumOf(hits))}</b>` : ''}</button>`;
       }).join('')}
     </div>`;
 
@@ -1514,9 +1606,15 @@ function renderPickList(kind, name) {
         <span>${all.length} 張單</span>
         <span>未結 <b>${money(owe)}</b></span>
       </div>
+      ${accRows.length ? `<div class="acct-sum">
+        <span class="lb">待會計確認<i>已結帳、貨態都完成</i></span>
+        <span class="n">${accRows.length} 張</span>
+        <span class="amt">${money(accSum)}</span>
+      </div>` : ''}
       ${chips}
       ${rows.length
-        ? `${st ? `<div class="stage-note">目前只看「${sEsc(st.label)}${sEsc(st.sub ? '：' + st.sub : '')}」，共 ${rows.length} 張</div>` : ''}
+        ? `${st ? `<div class="stage-note">目前只看「${sEsc(st.label)}${sEsc(st.sub ? '：' + st.sub : '')}」，
+             共 ${rows.length} 張　·　合計 <b>${money(sumOf(rows))}</b></div>` : ''}
            ${rows.map(r => pickCard(r, kind)).join('')}`
         : `<div class="empty">這個階段目前沒有單子 🎉</div>`}`
       : `<div class="empty">目前沒有待處理的${name}訂單 🎉</div>`);
@@ -1561,6 +1659,7 @@ function pickCard(r, kind) {
     <div class="pick-head">
       <span class="nm">${sEsc(r['客戶名稱'] || '（未填）')}</span>
       ${dead ? `<span class="tag tag-cancel">${sEsc(r['狀態'])}</span>` : ''}
+      ${collectOf(r) ? `<span class="pill-col ${collectOf(r) === SALES.COLLECT_PAID ? 'prepaid' : 'cod'}">${sEsc(collectOf(r))}</span>` : ''}
       <span class="pill-pay ${paid ? 'yes' : 'no'}">${sEsc(r['結帳狀態'] || '未結帳')}</span>
       <span class="amt">${money(r['價格'])}${Number(r['運費']) ? `<i>+運${money(r['運費'])}</i>` : ''}</span>
     </div>
@@ -1582,6 +1681,7 @@ function pickCard(r, kind) {
       <span class="pc"><input class="rInp pick-in" data-f="寄件代碼" value="${sEsc(r['寄件代碼'] || '')}" placeholder="寄出後回填"></span>
     </div>
     ${chips('取貨狀態', SALES.PICK, r['取貨狀態'])}
+    ${chips('收款方式', SALES.COLLECT, r['收款方式'])}
     ${chips('結帳狀態', SALES.PAY, r['結帳狀態'])}
     ${flow}
     ${!dead && ready ? `<div class="acct-ready">✅ 寄件、取件、結帳都完成了，等<b>會計確認</b>結案</div>` : ''}
@@ -1658,8 +1758,10 @@ function recvCard(r, kind) {
       <div><label>寄件狀態</label><select class="rSel" data-f="寄件狀態">${opts([SALES.NA].concat(SALES.SHIP), r['寄件狀態'])}</select></div>
       <div><label>取貨狀態</label><select class="rSel" data-f="取貨狀態">${opts([SALES.NA].concat(SALES.PICK), r['取貨狀態'])}</select></div>
       <div><label>寄件代碼</label><input class="rInp" data-f="寄件代碼" value="${sEsc(r['寄件代碼'] || '')}"></div>
-      <div><label>寄送方式</label><select class="rSel" data-f="寄送方式">${opts([SALES.NA].concat(kind === 'dist' ? SALES.DIST_SEND_WAY : SALES.SEND_WAY), r['寄送方式'])}</select></div>
+      <div><label>寄送方式</label><select class="rSel" data-f="寄送方式">${opts([SALES.NA].concat(kind === 'dist' ? distWays() : miniWays()), r['寄送方式'])}</select></div>
       ${(() => {
+        // 收件者提供寄件代號的單沒有「寄到哪」，代號本身在上面的寄件代碼欄
+        if (byCode(r['寄送方式'])) return '';
         const fld = kind !== 'dist' ? '店名'
           : (String(r['寄送方式']) === SALES.HOME_DELIVERY ? '宅配地址' : '收貨門市');
         return `<div${fld === '宅配地址' ? ' style="grid-column:1/-1"' : ''}><label>${fld}</label>
@@ -1695,9 +1797,21 @@ function wireRecv(kind) {
     // 這樣按了「已寄出」之後「退貨入庫」才會馬上出現，不用先按一次儲存
     card.querySelectorAll('.pchip').forEach(b => b.onclick = async () => {
       if (b.classList.contains('on')) return;
-      const fld = b.dataset.chip;
-      patch[fld] = b.dataset.val;
+      const fld = b.dataset.chip, val = b.dataset.val;
+      // 「已收貨款」和「未結帳」是互相矛盾的，不讓它們同時存在
+      if (fld === '結帳狀態' && val === '未結帳' && collectOf(r) === SALES.COLLECT_PAID) {
+        return alert('這張單的收款方式是「已收貨款」，錢開單時就收到了，不能改成未結帳。\n\n'
+          + '如果其實還沒收到錢，請先把收款方式改成「貨到付款」，再改結帳狀態。');
+      }
+      patch[fld] = val;
       card.querySelectorAll(`.pchip[data-chip="${fld}"]`).forEach(x => x.classList.toggle('on', x === b));
+      // 收款方式改成「已收貨款」＝錢已經收到了，結帳狀態一起跟上
+      if (fld === '收款方式' && val === SALES.COLLECT_PAID && String(r['結帳狀態']) !== '已結帳') {
+        patch['結帳狀態'] = '已結帳';
+        if (!r['結帳日']) patch['結帳日'] = todayStr();
+        card.querySelectorAll('.pchip[data-chip="結帳狀態"]').forEach(x =>
+          x.classList.toggle('on', x.dataset.val === '已結帳'));
+      }
       if (patch['結帳狀態'] === '已結帳' && r['結帳狀態'] !== '已結帳') patch['結帳確認者'] = userName() + ' ' + nowStr();
       card.querySelectorAll('.pchip').forEach(x => x.disabled = true);
       try {

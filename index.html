@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="3.6">
+<meta name="app-version" content="3.7">
 <title>西門龍門儀錶板</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -472,6 +472,30 @@ textarea{min-height:84px;resize:vertical}
 .flow i{font-style:normal;color:var(--ink-3);opacity:.5;font-size:12px}
 .acct-ready{margin-top:8px;padding:8px 11px;border-radius:9px;background:#ecfdf5;
   border:1px solid #a7f3d0;color:#047857;font-size:12.5px;font-weight:700}
+
+/* ---------- 品項性質（保固換貨／點數換贈／公關贈品） ---------- */
+.gift-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;
+  padding:7px 10px;border-radius:9px;background:#f8fafc;border:1px dashed var(--line)}
+.gift-row .gl{font-size:12.5px;font-weight:700;color:var(--ink-3);flex:0 0 auto}
+.gift-row select{flex:1 1 140px;min-width:0}
+.gift-row .gt{flex:1 1 100%;font-style:normal;font-size:11.5px;color:#9a3412}
+.gift-row.on{background:#fff7ed;border-color:#fed7aa;border-style:solid}
+
+/* ---------- 網路單收款方式徽章 ---------- */
+.pill-col{font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:999px;white-space:nowrap}
+.pill-col.prepaid{background:#ecfdf5;color:#047857}
+.pill-col.cod{background:#eff6ff;color:#1d4ed8}
+
+/* ---------- 待會計確認小計 ---------- */
+.acct-sum{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:12px;
+  padding:10px 14px;border-radius:11px;background:#ecfdf5;border:1px solid #a7f3d0}
+.acct-sum .lb{font-size:13px;font-weight:700;color:#047857;line-height:1.3}
+.acct-sum .lb i{display:block;font-style:normal;font-weight:400;font-size:11px;color:#059669}
+.acct-sum .n{margin-left:auto;font-size:12.5px;color:#047857}
+.acct-sum .amt{font-size:17px;font-weight:800;color:#047857;font-variant-numeric:tabular-nums}
+.stage-bar .stg b.sm{flex:1 1 100%;font-size:11.5px;font-weight:700;color:var(--ink-2);
+  font-variant-numeric:tabular-nums}
+.stage-bar .stg.on b.sm{color:var(--brand)}
 .rec-card.pick{padding:12px 14px}
 .pick-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:2px}
 .pick-head .nm{font-weight:700;font-size:16px;flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
@@ -640,7 +664,7 @@ textarea{min-height:84px;resize:vertical}
 <div id="toastHost"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="app.js?v=3.6"></script>
-<script src="sales.js?v=3.6"></script>
+<script src="app.js?v=3.7"></script>
+<script src="sales.js?v=3.7"></script>
 </body>
 </html>
