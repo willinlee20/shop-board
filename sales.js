@@ -401,8 +401,7 @@ document.addEventListener('click', e => {
 });
 
 /* ----------------------------- 銷售單表單 ------------------------------ */
-function newSaleItem() { return { cat: S.lastCat || null, name: '', row: null, qty: 1, price: 0, gift: '' }; }
-function newDistGroup() { return { cat: S.lastCat || null, name: '', qty: {}, price: {} }; }
+function newSpecGroup() { return { cat: S.lastCat || null, name: '', qty: {}, price: {}, gift: {} }; }
 
 function openSaleForm(kind) {
   const store0 = CONFIG.STORES[0].label;
@@ -410,7 +409,7 @@ function openSaleForm(kind) {
     // 來店單：這間店按過「本日營業結束」的話，日期直接跳到下一個營業日
     kind, date: kind === 'shop' ? openDay(store0) : todayStr(), staff: defaultStaff(),
     store: store0,
-    items: [newSaleItem()], groups: [newDistGroup()],
+    groups: [newSpecGroup()],
     cName: '', tel: '', note: '', fee: '', discount: '', payStatus: SALES.PAY[0], payDate: '',
     collect: SALES.COLLECT_COD,        // 網路單預設貨到付款
     payWay: SALES.PAYWAY[0],           // 來店單：現金／匯款
@@ -587,7 +586,7 @@ function renderSaleBody() {
     html += `<div class="field"><label>經銷名稱 <span class="req">*</span></label>
         <select id="fDist">${opts(SALE.lists.dist.map(x => x.name), f.distName)}</select></div>
       <div class="field"><label>經銷聯絡電話</label>${telIn('fDistTel', f.distTel)}</div>`
-      + distBlock()
+      + itemsBlock()
       + `<div class="field"><label>寄送方式</label>
           <div class="chips big-chips" id="dwayChips">
             ${distWays().map(w => `<button class="chip${w === f.dSendWay ? ' on' : ''}" data-dway="${w}">${w}</button>`).join('')}
@@ -628,16 +627,10 @@ function itemsBlock() {
     </div>
     <div class="total-bar net" id="netBar"><span>銷貨金額</span><span id="saleNet">NT$0</span></div>` : '';
   return `<div class="field"><label>訂單內容 <span class="req">*</span></label>
-    <div id="saleItems"></div>
-    <button class="btn add-item" id="addSaleItem">＋ 增加品項</button>
+    <div id="specGroups"></div>
+    <button class="btn add-item" id="addSpecGroup">＋ 增加另一個產品</button>
     <div class="total-bar"><span>金額合計</span><span id="saleTotal">NT$0</span></div>
     ${disc}</div>`;
-}
-function distBlock() {
-  return `<div class="field"><label>訂單內容 <span class="req">*</span></label>
-    <div id="distGroups"></div>
-    <button class="btn add-item" id="addDistGroup">＋ 增加另一個產品</button>
-    <div class="total-bar"><span>金額合計</span><span id="saleTotal">NT$0</span></div></div>`;
 }
 
 function wireSaleBody() {
@@ -693,94 +686,15 @@ function wireSaleBody() {
   on('fDist', 'onchange', e => { f.distName = e.target.value; applyDistDefaults(); renderSaleBody(); });
   on('fUseDef', 'onchange', e => { f.useDefault = e.target.checked; applyDistDefaults(); renderSaleBody(); });
 
-  on('addSaleItem', 'onclick', () => { f.items.push(newSaleItem()); renderSaleItems(); });
-  on('addDistGroup', 'onclick', () => { f.groups.push(newDistGroup()); renderDistGroups(); });
-  if ($('saleItems')) renderSaleItems();
-  if ($('distGroups')) renderDistGroups();
-}
-
-/* ---- 品項（來店 / 網路 / 小賣）：分類 → 品名 → 規格 → 數量 → 單價 ---- */
-function renderSaleItems() {
-  const host = $('saleItems'), P = S.products, f = SALE.form;
-  host.innerHTML = f.items.map((it, i) => {
-    const p = it.row ? P.byRow.get(it.row) : null;
-    const cat = it.cat || (p ? p.cat : null) || S.lastCat || (P.cats[0] || ALL_CAT);
-    const names = (!P.hasCats || cat === ALL_CAT) ? P.names : (P.byCat.get(cat) || []);
-    const variants = it.name ? (P.byName.get(it.name) || []) : [];
-    const have = p ? (p.nums[saleSrc()] || 0) : 0;
-    const tabs = P.hasCats ? `<div class="cat-tabs">
-        ${P.cats.map(c => `<button class="cat-tab${c === cat ? ' on' : ''}" data-cat="${sEsc(c)}">${sEsc(c)}</button>`).join('')}
-        <button class="cat-tab${cat === ALL_CAT ? ' on' : ''}" data-cat="${ALL_CAT}">全部</button></div>` : '';
-    return `<div class="item-row" data-i="${i}">
-      ${tabs}
-      <div class="two">
-        <div class="f"><label>產品名稱</label>
-          <select class="itemName"><option value="">— 請選擇（${names.length} 項）—</option>
-            ${names.map(n => `<option value="${sEsc(n)}"${n === it.name ? ' selected' : ''}>${sEsc(n)}</option>`).join('')}
-          </select></div>
-        <div class="f"><label>產品規格</label>
-          <select class="itemSpec"${it.name ? '' : ' disabled'}>
-            <option value="">${it.name ? '— 請選擇規格 —' : '請先選產品名稱'}</option>
-            ${variants.map(v => `<option value="${v.sheetRow}"${v.sheetRow === it.row ? ' selected' : ''}>${sEsc(v.spec || '（無規格）')}（${srcLabel(saleSrc())} ${v.nums[saleSrc()] || 0}）</option>`).join('')}
-          </select></div>
-      </div>
-      ${p ? `<div class="stockline${it.qty > have ? ' short' : ''}">${sEsc(srcLabel(saleSrc()))}現有 <b>${have}</b>${it.qty > have ? `　⚠ 不足 ${it.qty - have}` : ''}　·　售價 ${money(p.price)}</div>` : ''}
-      <div class="r2">
-        <div class="f"><label>數量</label>${qtyIn('itemQty', it.qty, '1', 1)}</div>
-        <div class="f"><label>單價</label>${numIn('itemPrice', isGift(it) ? 0 : it.price, '0', isGift(it) ? 'disabled' : '')}</div>
-        <div class="f" style="max-width:110px"><label>小計</label>
-          <input type="text" value="${money(isGift(it) ? 0 : it.qty * it.price)}" readonly style="background:#f1f5f9"></div>
-        ${f.items.length > 1 ? `<button class="del">✕</button>` : ''}
-      </div>
-      ${f.kind === 'online' ? `<div class="gift-row${isGift(it) ? ' on' : ''}">
-        <span class="gl">性質</span>
-        <select class="itemGift">
-          <option value="">正常銷售</option>
-          ${SALES.GIFT.map(g => `<option value="${sEsc(g)}"${g === (it.gift || '') ? ' selected' : ''}>${sEsc(g)}</option>`).join('')}
-        </select>
-        ${isGift(it) ? `<i class="gt">不算營收、不算成本，庫存照扣</i>` : ''}
-      </div>` : ''}</div>`;
-  }).join('');
-
-  host.querySelectorAll('.item-row').forEach(row => {
-    const i = +row.dataset.i, it = f.items[i];
-    row.querySelectorAll('.cat-tab').forEach(t => t.onclick = () => {
-      it.cat = t.dataset.cat; S.lastCat = it.cat;
-      const ns = it.cat === ALL_CAT ? S.products.names : (S.products.byCat.get(it.cat) || []);
-      if (it.name && !ns.includes(it.name)) { it.name = ''; it.row = null; }
-      renderSaleItems();
-    });
-    row.querySelector('.itemName').onchange = e => {
-      it.name = e.target.value; it.row = null; it.spec = '';
-      const vs = S.products.byName.get(it.name) || [];
-      if (vs.length === 1) { it.row = vs[0].sheetRow; it.price = isGift(it) ? 0 : vs[0].price; it.spec = vs[0].spec; }
-      renderSaleItems(); saleTotal();
-    };
-    row.querySelector('.itemSpec').onchange = e => {
-      it.row = +e.target.value || null;
-      const p = it.row ? S.products.byRow.get(it.row) : null;
-      if (p) { it.price = isGift(it) ? 0 : p.price; it.cat = p.cat; it.name = p.name; it.spec = p.spec; }
-      renderSaleItems(); saleTotal();
-    };
-    row.querySelector('.itemQty').oninput = e => { it.qty = Math.max(1, +e.target.value || 1); saleTotal(); };
-    row.querySelector('.itemPrice').oninput = e => { it.price = Math.max(0, +e.target.value || 0); saleTotal(); };
-    const gf = row.querySelector('.itemGift');
-    if (gf) gf.onchange = e => {
-      it.gift = e.target.value;
-      // 標成贈品就把單價歸零；取消贈品再把售價帶回來，同事不用自己重打
-      if (it.gift) it.price = 0;
-      else { const q = findProduct(it); it.price = q ? q.price : 0; }
-      renderSaleItems(); saleTotal();
-    };
-    const d = row.querySelector('.del');
-    if (d) d.onclick = () => { f.items.splice(i, 1); renderSaleItems(); saleTotal(); };
-  });
-  saleTotal();
+  on('addSpecGroup', 'onclick', () => { f.groups.push(newSpecGroup()); renderSpecGroups(); });
+  if ($('specGroups')) renderSpecGroups();
 }
 
 /* ---- 經銷：同系列一次列出，每個規格都有「數量 + 單價」 ---- */
-function renderDistGroups() {
-  const host = $('distGroups'), P = S.products, f = SALE.form;
+function renderSpecGroups() {
+  const host = $('specGroups'), P = S.products, f = SALE.form;
+  const src = saleSrc(), srcName = srcLabel(src);
+  const gifts = f.kind === 'online';          // 只有網路單要標品項性質
   host.innerHTML = f.groups.map((g, i) => {
     const cat = g.cat || S.lastCat || (P.cats[0] || ALL_CAT);
     const names = (!P.hasCats || cat === ALL_CAT) ? P.names : (P.byCat.get(cat) || []);
@@ -789,15 +703,25 @@ function renderDistGroups() {
         ${P.cats.map(c => `<button class="cat-tab${c === cat ? ' on' : ''}" data-cat="${sEsc(c)}">${sEsc(c)}</button>`).join('')}
         <button class="cat-tab${cat === ALL_CAT ? ' on' : ''}" data-cat="${ALL_CAT}">全部</button></div>` : '';
     const specs = variants.length ? `<div class="spec-list">
-        <div class="spec-head"><span>規格</span><span class="sq">總倉</span><span class="qt">數量</span><span class="qt pr">單價</span></div>
+        <div class="spec-head"><span>規格</span><span class="sq">${sEsc(srcName)}</span><span class="qt">數量</span><span class="qt pr">單價</span></div>
         ${variants.map(v => {
-          const q = g.qty[v.sheetRow] || '', pr = g.price[v.sheetRow] ?? '';
-          return `<div class="spec-row${q ? ' has' : ''}" data-row="${v.sheetRow}">
+          const q = g.qty[v.sheetRow] || '', gv = g.gift[v.sheetRow] || '';
+          const pr = gv ? 0 : (g.price[v.sheetRow] ?? '');
+          const have = v.nums[src] || 0;
+          return `<div class="spec-row${q ? ' has' : ''}${q && q > have ? ' short' : ''}" data-row="${v.sheetRow}">
             <span class="nm">${sEsc(v.spec || '（無規格）')}</span>
-            <span class="sq">${v.nums[CONFIG.H.warehouse] || 0}</span>
+            <span class="sq${have <= 0 ? ' zero' : ''}">${have}</span>
             ${qtyIn('gq', q, '0', 0, `data-row="${v.sheetRow}"`)}
-            ${numIn('gp', pr, String(v.price || 0), `data-row="${v.sheetRow}"`)}
-          </div>`;
+            ${numIn('gp', pr, String(v.price || 0), `data-row="${v.sheetRow}"${gv ? ' disabled' : ''}`)}
+          </div>
+          ${gifts && q ? `<div class="gift-row${gv ? ' on' : ''}" data-row="${v.sheetRow}">
+            <span class="gl">性質</span>
+            <select class="gGift" data-row="${v.sheetRow}">
+              <option value="">正常銷售</option>
+              ${SALES.GIFT.map(x => `<option value="${sEsc(x)}"${x === gv ? ' selected' : ''}>${sEsc(x)}</option>`).join('')}
+            </select>
+            ${gv ? `<i class="gt">不算營收、不算成本，庫存照扣</i>` : ''}
+          </div>` : ''}`;
         }).join('')}</div>`
       : (g.name ? '' : `<div class="spec-empty">選好產品名稱後，這裡會列出所有規格，填數量和單價</div>`);
     return `<div class="group-box" data-i="${i}">
@@ -816,49 +740,60 @@ function renderDistGroups() {
     box.querySelectorAll('.cat-tab').forEach(t => t.onclick = () => {
       g.cat = t.dataset.cat; S.lastCat = g.cat;
       const ns = g.cat === ALL_CAT ? S.products.names : (S.products.byCat.get(g.cat) || []);
-      if (g.name && !ns.includes(g.name)) { g.name = ''; g.qty = {}; g.price = {}; }
-      renderDistGroups();
+      if (g.name && !ns.includes(g.name)) { g.name = ''; g.qty = {}; g.price = {}; g.gift = {}; }
+      renderSpecGroups();
     });
     box.querySelector('.gName').onchange = e => {
-      g.name = e.target.value; g.qty = {}; g.price = {};
+      g.name = e.target.value; g.qty = {}; g.price = {}; g.gift = {};
       const p = (S.products.byName.get(g.name) || [])[0];
       if (p) g.cat = p.cat;
-      renderDistGroups(); saleTotal();
+      renderSpecGroups(); saleTotal();
     };
     box.querySelectorAll('.gq').forEach(inp => inp.oninput = ev => {
       const n = Math.max(0, +ev.target.value || 0), r = ev.target.dataset.row;
+      const was = !!g.qty[r];
       if (n) { g.qty[r] = n; if (g.price[r] === undefined) { const p = S.products.byRow.get(+r); g.price[r] = p ? p.price : 0; } }
-      else delete g.qty[r];
-      ev.target.closest('.spec-row').classList.toggle('has', !!n);
-      const pe = ev.target.closest('.spec-row').querySelector('.gp');
+      else { delete g.qty[r]; delete g.gift[r]; }
+      // 網路單：這一列從 0 變成有數量（或反過來）時，底下的「性質」選單要跟著出現／收起
+      if (gifts && was !== !!n) { renderSpecGroups(); saleTotal(); return; }
+      const rowEl = ev.target.closest('.spec-row');
+      rowEl.classList.toggle('has', !!n);
+      const have = Number(rowEl.querySelector('.sq').textContent) || 0;
+      rowEl.classList.toggle('short', !!n && n > have);
+      const pe = rowEl.querySelector('.gp');
       if (pe && n && !pe.value) pe.value = g.price[r];
       saleTotal();
     });
     box.querySelectorAll('.gp').forEach(inp => inp.oninput = ev => {
       g.price[ev.target.dataset.row] = Math.max(0, +ev.target.value || 0); saleTotal();
     });
+    box.querySelectorAll('.gGift').forEach(sel => sel.onchange = ev => {
+      const r = ev.target.dataset.row, v = ev.target.value;
+      // 標成贈品就把單價歸零；取消贈品再把售價帶回來，同事不用自己重打
+      if (v) { g.gift[r] = v; g.price[r] = 0; }
+      else { delete g.gift[r]; const p = S.products.byRow.get(+r); g.price[r] = p ? p.price : 0; }
+      renderSpecGroups(); saleTotal();
+    });
     const d = box.querySelector('.del');
-    if (d) d.onclick = () => { f.groups.splice(i, 1); renderDistGroups(); saleTotal(); };
+    if (d) d.onclick = () => { f.groups.splice(i, 1); renderSpecGroups(); saleTotal(); };
   });
   saleTotal();
 }
 
+/** 把規格表上填了數量的格子，攤平成一張單的品項清單（四種銷售單共用） */
 function saleItemList() {
-  const f = SALE.form, src = saleSrc();
-  if (f.kind === 'dist') {
-    const out = [];
-    f.groups.forEach(g => Object.keys(g.qty).forEach(r => {
-      const n = Number(g.qty[r]) || 0;
-      if (n > 0) {
-        const p = S.products.byRow.get(+r);
-        out.push({ row: +r, name: p ? p.name : (g.name || ''), spec: p ? p.spec : '',
-                   qty: n, price: Number(g.price[r]) || 0 });
-      }
-    }));
-    return fillItems(out, src);
-  }
-  return fillItems(f.items.filter(i => i.row)
-    .map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, price: i.price, gift: i.gift || '' })), src);
+  const src = saleSrc(), out = [];
+  SALE.form.groups.forEach(g => Object.keys(g.qty).forEach(r => {
+    const n = Number(g.qty[r]) || 0;
+    if (n <= 0) return;
+    const p = S.products.byRow.get(+r);
+    const gv = (g.gift || {})[r] || '';
+    out.push({
+      row: +r, name: p ? p.name : (g.name || ''), spec: p ? p.spec : '',
+      qty: n, price: gv ? 0 : (Number(g.price[r]) || 0), gift: gv
+    });
+  }));
+  return fillItems(out, src);
 }
 function saleTotal() {
   const gross = itemsTotal(saleItemList()), d = discountOf(gross);
@@ -1193,11 +1128,15 @@ function groupsFromSaleItems(items) {
   const out = [];
   items.forEach(i => {
     let g = out.find(x => x.name === i.name);
-    if (!g) { g = { cat: (S.products.byRow.get(i.row) || {}).cat || null, name: i.name, qty: {}, price: {} }; out.push(g); }
+    if (!g) {
+      g = { cat: (S.products.byRow.get(i.row) || {}).cat || null, name: i.name, qty: {}, price: {}, gift: {} };
+      out.push(g);
+    }
     g.qty[i.row] = (Number(g.qty[i.row]) || 0) + (Number(i.qty) || 0);
     g.price[i.row] = Number(i.price) || 0;
+    if (giftOf(i)) g.gift[i.row] = giftOf(i);      // 網路單的品項性質要帶回來
   });
-  return out.length ? out : [newDistGroup()];
+  return out.length ? out : [newSpecGroup()];
 }
 
 /** 開啟「修改銷售單」：四種單別共用 */
@@ -1230,7 +1169,6 @@ function openSaleEdit(kind, r) {
       + lost.map(x => `・${x.name} ${x.spec}`).join('\n')
       + '\n\n可能是產品被改名或刪除了。請先確認庫存表。');
   }
-  f.items = list.length ? list : [newSaleItem()];
   f.groups = groupsFromSaleItems(list);
 
   if (kind === 'shop') {
@@ -1511,6 +1449,10 @@ function renderRecv(kind) {
 
   const rows = unsettled(kind).filter(r => String(r['結帳狀態']) !== '已結帳' && liveOrder(r));
   const done = unsettled(kind).filter(r => String(r['結帳狀態']) === '已結帳' && liveOrder(r));
+  // 已作廢／已退貨入庫，但還沒有人按「收起」的單。
+  // 以前這兩段都加了 liveOrder 過濾，這種單就兩邊都排不進來——
+  // 首頁的數字算得到、點進來卻看不到，同事只會覺得「明明結清了還掛著」。
+  const dead = unsettled(kind).filter(r => !liveOrder(r));
 
   const bag = new Map();
   rows.forEach(r => {
@@ -1539,6 +1481,14 @@ function renderRecv(kind) {
           <span class="who3">${sEsc(recvWho(r, kind))}</span>
           <span class="owe" style="color:var(--ok)">${money(owedOf(r))}</span>
           <span class="sub2">${sEsc(r['訂單日期'])}　·　${sEsc(r['取貨狀態'] || '')}<i class="go">點開處理 ›</i></span>
+        </button>`).join('')}` : '') +
+    (dead.length ? `<div class="sec-title">已作廢／已退貨入庫，等收起（${dead.length}）</div>
+      <div class="hint-row" style="margin:-4px 0 10px 2px">這幾張已經處理完了，庫存當初就退回去了。
+        按進去按「✓ 收起」就會從清單和上面的數字消失。</div>
+      ${dead.map(r => `<button class="sum-card is-dead" data-who="${sEsc(recvWho(r, kind))}">
+          <span class="who3">${sEsc(recvWho(r, kind))}</span>
+          <span class="owe" style="color:var(--ink-3)">${money(owedOf(r))}</span>
+          <span class="sub2">${sEsc(r['訂單日期'])}　·　<b>${sEsc(r['狀態'])}</b><i class="go">點開收起 ›</i></span>
         </button>`).join('')}` : '');
 
   document.querySelectorAll('#salesView .sum-card').forEach(b =>

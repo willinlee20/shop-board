@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="3.7">
+<meta name="app-version" content="3.8">
 <title>西門龍門儀錶板</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -236,6 +236,14 @@ textarea{min-height:84px;resize:vertical}
 .spec-row input.gp{flex:0 0 92px;width:92px;text-align:center;padding-left:6px;padding-right:6px}
 .spec-row.has{background:var(--brand-soft)}
 .spec-row.has .nm{font-weight:500}
+/* 填的數量比現有庫存多：整列標紅，送出後會變負數 */
+.spec-row.short{background:var(--bad-soft)}
+.spec-row.short .sq{color:var(--bad);font-weight:700}
+/* 規格表裡的「性質」列：填了數量的那一格底下才會出現，整列佔滿 */
+.spec-list .gift-row{margin-top:0;border-top:1px solid var(--line);border-radius:0;
+  border-left:0;border-right:0;border-bottom:0;border-style:solid;padding:6px 10px}
+.spec-list .gift-row .gl{padding-left:2px}
+.spec-list .gift-row select{flex:1 1 120px;height:38px;padding:4px 8px}
 /* 數量欄：−／＋ 按鈕 */
 .stp{display:inline-flex;align-items:stretch;width:100%}
 .stp .sb{
@@ -664,7 +672,7 @@ textarea{min-height:84px;resize:vertical}
 <div id="toastHost"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="app.js?v=3.7"></script>
-<script src="sales.js?v=3.7"></script>
+<script src="app.js?v=3.8"></script>
+<script src="sales.js?v=3.8"></script>
 </body>
 </html>

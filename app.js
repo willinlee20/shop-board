@@ -5,8 +5,8 @@
    ========================================================================= */
 
 /* ----------------------------- 版本 ------------------------------------ */
-const APP_VERSION = '3.7';          // 每次改版都會更新，畫面右上角看得到
-const APP_DATE = '2026-09-23';
+const APP_VERSION = '3.8';          // 每次改版都會更新，畫面右上角看得到
+const APP_DATE = '2026-09-24';
 
 /* ----------------------------- 設定區 -----------------------------------
    要改的東西都在這裡，下面的程式不用動。
@@ -104,6 +104,11 @@ function todayStr() {
  * 數量欄：左右各一顆 −／＋ 按鈕，按一下加減 1，中間還是可以直接打字。
  * app.js 和 sales.js 的每個「數量」都用這個，所以按鈕行為到處一樣。
  */
+/** 單價之類的數字輸入（不需要 −／＋ 按鈕） */
+function numIn2(cls, val, ph, extra) {
+  return `<input type="number" inputmode="decimal" class="${cls}" min="0" step="1"
+    value="${val ?? ''}" placeholder="${ph || ''}" ${extra || ''}>`;
+}
 function qtyIn(cls, val, ph, min, extra) {
   const lo = min === undefined ? 0 : min;
   return `<span class="stp">
@@ -364,16 +369,24 @@ async function bootstrap() {
 }
 
 /** 讀庫存表：用標題列自動對應欄位，欄位順序變動也不會壞 */
+/**
+ * 標題比對用：把所有空白都拿掉（半形、全形、換行都算）。
+ * 有人為了排版在標題格裡打了空格（例如「   分 類」），
+ * 光用 trim() 只去得掉前後，中間那個去不掉，欄位就整個認不出來——
+ * 分類分頁會消失，如果被動到的是「產品名稱」，整張庫存表都會讀不進來。
+ */
+const normHead = s => String(s == null ? '' : s).replace(/[\s　]+/g, '');
+
 async function loadProducts() {
   const rows = await readRange(S.productTitle, 'A1:Z3000', 'FORMULA');
   let hi = -1;
   for (let i = 0; i < Math.min(rows.length, 10); i++) {
-    if ((rows[i] || []).some(c => String(c).trim() === CONFIG.H.name)) { hi = i; break; }
+    if ((rows[i] || []).some(c => normHead(c) === normHead(CONFIG.H.name))) { hi = i; break; }
   }
   if (hi < 0) throw new Error(`在「${S.productTitle}」找不到標題列（需要有一欄叫「${CONFIG.H.name}」）`);
 
   const cols = {};
-  (rows[hi] || []).forEach((c, i) => { const k = String(c).trim(); if (k && cols[k] === undefined) cols[k] = i; });
+  (rows[hi] || []).forEach((c, i) => { const k = normHead(c); if (k && cols[k] === undefined) cols[k] = i; });
 
   const need = [CONFIG.H.name, CONFIG.H.spec, CONFIG.H.reserve, ...CONFIG.STORES.map(s => s.col)];
   const miss = need.filter(h => cols[h] === undefined);
@@ -1174,31 +1187,33 @@ function openForm(editId) {
       discount: ordDisc(r) ? String(ordDisc(r)) : '',
       payWay: ordPayWay(r),
       taskText: r['類型'] === TYPES.TASK ? (r['備註'] || '') : '',
-      routines: String(r['例行工作項目'] || '').split('\n').filter(Boolean),
-      items: parseJSON(r['品項JSON'], []).map(i => {
-        const hit = findProduct(i);
-        return { name: hit ? hit.name : (i.name || ''), spec: hit ? hit.spec : (i.spec || ''),
-                 row: hit ? hit.sheetRow : i.row,
-                 qty: i.qty, price: i.price || 0, src: i.src || i.storeCol || DEFAULT_SRC(),
-                 cat: hit ? hit.cat : null, missing: !hit };
-      })
+      routines: String(r['例行工作項目'] || '').split('\n').filter(Boolean)
     };
-    const lost = FORM.items.filter(x => x.missing);
+    // 品項一律用「名稱＋規格」找回來，不能信單子上記的列號
+    const parsed = parseJSON(r['品項JSON'], []).map(i => {
+      const hit = findProduct(i);
+      return { name: hit ? hit.name : (i.name || ''), spec: hit ? hit.spec : (i.spec || ''),
+               row: hit ? hit.sheetRow : i.row,
+               qty: i.qty, price: i.price || 0, src: i.src || i.storeCol || DEFAULT_SRC(),
+               cat: hit ? hit.cat : null, missing: !hit };
+    });
+    const lost = parsed.filter(x => x.missing);
     if (lost.length) {
       FORM = null;
       return alert('這筆留言有品項在庫存表找不到，為了避免庫存算錯，先不開放修改：\n\n'
         + lost.map(x => `・${x.name} ${x.spec}`).join('\n')
         + '\n\n可能是產品被改名或刪除了。請先確認庫存表，或取消這張單重開一張。');
     }
-    if (!FORM.items.length) FORM.items = [newItem()];
-    FORM.groups = groupsFromItems(FORM.items);
+    // 預訂單整張單一個來源：沿用單子上原本的來源（第一個品項的）
+    FORM.orderSrc = (parsed[0] || {}).src || DEFAULT_SRC();
+    FORM.groups = groupsFromItems(parsed);
   } else {
     FORM = {
       editId: null, type: TYPES.ORDER, store: CONFIG.STORES[0].label,
       source: CONFIG.SOURCES[0], slot: CONFIG.SLOTS[0], routines: [],
       reason: SCRAP_REASONS[0],
       discount: '', payWay: PAY_WAYS[0],
-      items: [newItem()], groups: [newGroup()]
+      orderSrc: S.lastSrc || DEFAULT_SRC(), groups: [newGroup()]
     };
   }
 
@@ -1251,13 +1266,11 @@ function openForm(editId) {
 function closeForm() { $('modalHost').innerHTML = ''; FORM = null; }
 /** 備貨用：一個群組 = 一支產品 + 一個出貨來源 + 各規格的數量 */
 function newGroup() {
-  return { cat: S.lastCat || null, name: '', src: S.lastSrc || DEFAULT_SRC(), qty: {} };
+  return { cat: S.lastCat || null, name: '', src: S.lastSrc || DEFAULT_SRC(), qty: {}, price: {} };
 }
-
-function newItem() {
-  // 分類與出貨來源都沿用上一次選的，同事連續選同一類時不用重選
-  return { name: '', row: null, qty: 1, price: 0, src: S.lastSrc || DEFAULT_SRC(), cat: S.lastCat || null };
-}
+/** 預訂單整張單只有一個出貨來源（備貨單才是一個產品一個來源） */
+const oneSrc = () => FORM && FORM.type === TYPES.ORDER;
+const formSrc = () => (FORM && FORM.orderSrc) || DEFAULT_SRC();
 
 function renderFormBody() {
   const b = $('formBody');
@@ -1352,10 +1365,16 @@ function renderFormBody() {
       <div class="chips" id="slotChips">
         ${CONFIG.SLOTS.map(s => `<button class="chip ${s === FORM.slot ? 'on' : ''}" data-v="${s}">${s}</button>`).join('')}
       </div></div>
+    <div class="field"><label>這張單的貨從哪裡出 <span class="req">*</span></label>
+      <select id="fOrderSrc">
+        ${srcOptions().map(o => `<option value="${esc(o.col)}"${formSrc() === o.col ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}
+      </select>
+      <div class="hint-row">整張單統一從這裡出；要從不同地方調貨的品項請另外開一張。下面規格表的庫存數字也是看這裡。</div></div>
     <div class="field"><label>預訂品項 <span class="req">*</span></label>
-      <div id="itemRows"></div>
-      <button class="btn add-item" id="addItem">＋ 增加品項</button>
-      <div class="total-bar"><span>預訂金額合計</span><span id="fTotal">NT$0</span></div>
+      <div id="groupRows"></div>
+      <button class="btn add-item" id="addGroup">＋ 增加另一個產品</button>
+      <div class="hint-row" style="margin-top:6px">選好產品名稱，下面就會列出它的所有規格，要訂的填數量和單價。</div>
+      <div class="total-bar" style="margin-top:8px"><span>預訂金額合計</span><span id="fTotal">NT$0</span></div>
       <div class="disc-row">
         <span class="dl">折扣<i>直接減多少錢，沒折扣就留空</i></span>
         <input type="number" inputmode="decimal" id="fDisc" min="0" step="1"
@@ -1388,8 +1407,9 @@ function renderFormBody() {
     FORM.slot = c.dataset.v;
     b.querySelectorAll('#slotChips .chip').forEach(x => x.classList.toggle('on', x === c));
   });
-  $('addItem').onclick = () => { FORM.items.push(newItem()); renderItems(); };
-  renderItems();
+  $('fOrderSrc').onchange = e => { FORM.orderSrc = e.target.value; S.lastSrc = FORM.orderSrc; renderGroups(); };
+  $('addGroup').onclick = () => { FORM.groups.push(newGroup()); renderGroups(); };
+  renderGroups();
 }
 
 function stockText(p) {
@@ -1407,12 +1427,15 @@ function groupsFromItems(items) {
     const p = findProduct(it);
     if (!p) continue;
     const src = it.src || DEFAULT_SRC();
-    const k = p.name + '|' + src;
+    // 預訂單整張單共用一個來源，所以只照產品分組；備貨單才要「產品＋來源」各自一組
+    const k = oneSrc() ? p.name : p.name + '|' + src;
     if (!map.has(k)) {
-      const g = { cat: p.cat, name: p.name, src, qty: {} };
+      const g = { cat: p.cat, name: p.name, src, qty: {}, price: {} };
       map.set(k, g); out.push(g);
     }
-    map.get(k).qty[p.sheetRow] = (map.get(k).qty[p.sheetRow] || 0) + it.qty;
+    const g = map.get(k);
+    g.qty[p.sheetRow] = (g.qty[p.sheetRow] || 0) + it.qty;
+    g.price[p.sheetRow] = Number(it.price) || 0;
   }
   return out.length ? out : [newGroup()];
 }
@@ -1426,7 +1449,8 @@ function itemsFromGroups(groups) {
       if (n > 0) {
         const p = S.products.byRow.get(+row);
         items.push({ row: +row, name: p ? p.name : (g.name || ''), spec: p ? p.spec : '',
-                     qty: n, price: 0, src: g.src || DEFAULT_SRC() });
+                     qty: n, price: Number((g.price || {})[row]) || 0,
+                     src: oneSrc() ? formSrc() : (g.src || DEFAULT_SRC()) });
       }
     }
   }
@@ -1440,21 +1464,29 @@ function groupTotals(groups) {
 
 function updateGroupTotal() {
   const el = $('gTotal');
-  if (!el) return;
-  const t = groupTotals(FORM.groups);
-  el.textContent = `${t.kinds} 項 · ${t.pieces} 件`;
+  if (el) {
+    const t = groupTotals(FORM.groups);
+    el.textContent = `${t.kinds} 項 · ${t.pieces} 件`;
+  }
+  updateTotal();          // 預訂單的金額合計／折扣／銷貨金額
 }
 
-/** 備貨的品項輸入：分類 → 產品名稱 → 一次填多個規格的數量 → 選出貨來源 */
+/**
+ * 品項輸入（備貨單和預訂單共用）：
+ * 分類 → 產品名稱 → 該產品的所有規格一次列出來，直接填數量。
+ * 備貨單：每個產品各自選出貨來源，不用填價格。
+ * 預訂單：整張單一個出貨來源（在上面選），每個規格要填單價。
+ */
 function renderGroups() {
   const host = $('groupRows');
   const P = S.products;
+  const withPrice = oneSrc();                 // 預訂單才有單價欄
 
   host.innerHTML = FORM.groups.map((g, i) => {
     const cat = g.cat || S.lastCat || (P.cats[0] || ALL_CAT);
     const names = (!P.hasCats || cat === ALL_CAT) ? P.names : (P.byCat.get(cat) || []);
     const variants = g.name ? (P.byName.get(g.name) || []) : [];
-    const src = g.src || DEFAULT_SRC();
+    const src = oneSrc() ? formSrc() : (g.src || DEFAULT_SRC());
 
     const tabs = P.hasCats ? `<div class="cat-tabs">
         ${P.cats.map(c => `<button class="cat-tab${c === cat ? ' on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}
@@ -1463,14 +1495,15 @@ function renderGroups() {
 
     const specs = variants.length ? `
       <div class="spec-list">
-        <div class="spec-head"><span>規格</span><span class="sq">${esc(srcLabel(src))}</span><span class="qt">數量</span></div>
+        <div class="spec-head"><span>規格</span><span class="sq">${esc(srcLabel(src))}</span><span class="qt">數量</span>${withPrice ? '<span class="qt pr">單價</span>' : ''}</div>
         ${variants.map(v => {
           const have = v.nums[src] || 0;
           const q = g.qty[v.sheetRow] || '';
-          return `<div class="spec-row${q ? ' has' : ''}" data-row="${v.sheetRow}">
+          return `<div class="spec-row${q ? ' has' : ''}${q && q > have ? ' short' : ''}" data-row="${v.sheetRow}">
             <span class="nm">${esc(v.spec || '（無規格）')}</span>
             <span class="sq${have <= 0 ? ' zero' : ''}">${have}</span>
             ${qtyIn('gq', q, '0', 0, `data-row="${v.sheetRow}"`)}
+            ${withPrice ? numIn2('gp', (g.price || {})[v.sheetRow] ?? '', String(v.price || 0), `data-row="${v.sheetRow}"`) : ''}
           </div>`;
         }).join('')}
       </div>` : (g.name ? '' : `<div class="spec-empty">選好產品名稱後，這裡會列出所有規格，直接填數量即可</div>`);
@@ -1488,11 +1521,11 @@ function renderGroups() {
         </select>
       </div>
       ${specs}
-      <div class="f" style="margin-top:10px"><label>${FORM.type === TYPES.SCRAP ? '從哪裡扣掉這批貨' : '這批從哪裡出貨'}</label>
+      ${oneSrc() ? '' : `<div class="f" style="margin-top:10px"><label>${FORM.type === TYPES.SCRAP ? '從哪裡扣掉這批貨' : '這批從哪裡出貨'}</label>
         <select class="gSrc">
           ${srcOptions().map(o => `<option value="${esc(o.col)}"${src === o.col ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}
         </select>
-      </div>
+      </div>`}
     </div>`;
   }).join('');
 
@@ -1509,13 +1542,14 @@ function renderGroups() {
 
     box.querySelector('.gName').onchange = e => {
       g.name = e.target.value;
-      g.qty = {};                               // 換產品就清掉原本填的數量
+      g.qty = {}; g.price = {};                 // 換產品就清掉原本填的數量和單價
       const p = (S.products.byName.get(g.name) || [])[0];
       if (p) g.cat = p.cat;
       renderGroups(); updateGroupTotal();
     };
 
-    box.querySelector('.gSrc').onchange = e => {
+    const srcSel = box.querySelector('.gSrc');
+    if (srcSel) srcSel.onchange = e => {
       g.src = e.target.value;
       S.lastSrc = g.src;
       renderGroups();
@@ -1523,9 +1557,27 @@ function renderGroups() {
 
     box.querySelectorAll('.gq').forEach(inp => {
       inp.oninput = e => {
-        const n = Math.max(0, +e.target.value || 0);
-        if (n) g.qty[e.target.dataset.row] = n; else delete g.qty[e.target.dataset.row];
-        e.target.closest('.spec-row').classList.toggle('has', !!n);
+        const n = Math.max(0, +e.target.value || 0), r = e.target.dataset.row;
+        if (n) {
+          g.qty[r] = n;
+          // 第一次填數量時自動帶入售價，同事不用每一列都打一次
+          if (withPrice && g.price[r] === undefined) {
+            const p = S.products.byRow.get(+r); g.price[r] = p ? p.price : 0;
+          }
+        } else { delete g.qty[r]; }
+        const rowEl = e.target.closest('.spec-row');
+        rowEl.classList.toggle('has', !!n);
+        const have = Number(rowEl.querySelector('.sq').textContent) || 0;
+        rowEl.classList.toggle('short', !!n && n > have);
+        const pe = rowEl.querySelector('.gp');
+        if (pe && n && !pe.value) pe.value = g.price[r];
+        updateGroupTotal();
+      };
+    });
+
+    box.querySelectorAll('.gp').forEach(inp => {
+      inp.oninput = e => {
+        g.price[e.target.dataset.row] = Math.max(0, +e.target.value || 0);
         updateGroupTotal();
       };
     });
@@ -1536,115 +1588,13 @@ function renderGroups() {
   updateGroupTotal();
 }
 
-function stockBrief(p) {
-  const parts = srcOptions().map(o => `${o.label} ${p.nums[o.col] || 0}`);
-  return `（${parts.join(' / ')}）`;
-}
-
-function renderItems() {
-  const host = $('itemRows');
-  const P = S.products;
-  const isStock = FORM.type === TYPES.STOCKUP;
-
-  host.innerHTML = FORM.items.map((it, i) => {
-    const p = it.row ? P.byRow.get(it.row) : null;
-    // 這一列目前在哪個分類分頁
-    const cat = it.cat || (p ? p.cat : null) || S.lastCat || (P.cats[0] || ALL_CAT);
-    const names = (!P.hasCats || cat === ALL_CAT) ? P.names : (P.byCat.get(cat) || []);
-    const variants = it.name ? (P.byName.get(it.name) || []) : [];
-    const srcQty = p ? (p.nums[it.src || DEFAULT_SRC()] || 0) : 0;
-
-    const tabs = P.hasCats ? `<div class="cat-tabs">
-        ${P.cats.map(c => `<button class="cat-tab${c === cat ? ' on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}
-        <button class="cat-tab${cat === ALL_CAT ? ' on' : ''}" data-cat="${ALL_CAT}">全部</button>
-      </div>` : '';
-
-    return `<div class="item-row" data-i="${i}">
-      ${tabs}
-      <div class="two">
-        <div class="f"><label>${P.hasCats ? '②' : '①'} 產品名稱</label>
-          <select class="itemName">
-            <option value="">— 請選擇（${names.length} 項）—</option>
-            ${names.map(n => `<option value="${esc(n)}"${n === it.name ? ' selected' : ''}>${esc(n)}</option>`).join('')}
-          </select>
-        </div>
-        <div class="f"><label>${P.hasCats ? '③' : '②'} 產品規格</label>
-          <select class="itemSpec"${it.name ? '' : ' disabled'}>
-            <option value="">${it.name ? `— 請選擇規格（${variants.length} 種）—` : '請先選產品名稱'}</option>
-            ${variants.map(v => `<option value="${v.sheetRow}"${v.sheetRow === it.row ? ' selected' : ''}>${esc(v.spec || '（無規格）')}${esc(stockBrief(v))}</option>`).join('')}
-          </select>
-        </div>
-        <div class="f"><label>${P.hasCats ? '④' : '③'} 從哪裡出貨</label>
-          <select class="itemSrc">
-            ${srcOptions().map(o => `<option value="${esc(o.col)}"${(it.src || DEFAULT_SRC()) === o.col ? ' selected' : ''}>${esc(o.label)}${p ? `（現有 ${p.nums[o.col] || 0}）` : ''}</option>`).join('')}
-          </select>
-        </div>
-      </div>
-      ${p ? `<div class="stockline${it.qty > srcQty ? ' short' : ''}">
-          ${esc(srcLabel(it.src || DEFAULT_SRC()))}現有 <b>${srcQty}</b>${it.qty > srcQty ? `　⚠ 不足 ${it.qty - srcQty}，送出後會變負數` : ''}
-          ${isStock ? '' : `　·　售價 ${money(p.price)}`}</div>` : ''}
-      ${(!isStock && p && (it.src || DEFAULT_SRC()) === CONFIG.H.warehouse)
-        ? `<div class="warehouse-alert">🚚 從總倉調度，請協助備貨<span>送出後會自動幫你開一張備貨單，提醒把貨送到 ${esc(FORM.store)}</span></div>` : ''}
-      <div class="r2">
-        <div class="f"><label>數量</label>${qtyIn('itemQty', it.qty, '1', 1)}</div>
-        ${isStock ? '' : `
-        <div class="f"><label>銷售價格（單價）</label><input type="number" class="itemPrice" min="0" step="1" value="${it.price}"></div>
-        <div class="f" style="max-width:110px"><label>小計</label>
-          <input type="text" value="${money(it.qty * it.price)}" readonly style="background:#f1f5f9"></div>`}
-        ${FORM.items.length > 1 ? `<button class="del" title="刪除這個品項">✕</button>` : ''}
-      </div>
-    </div>`;
-  }).join('');
-
-  host.querySelectorAll('.item-row').forEach(row => {
-    const i = +row.dataset.i, it = FORM.items[i];
-
-    row.querySelectorAll('.cat-tab').forEach(t => t.onclick = () => {
-      it.cat = t.dataset.cat;
-      S.lastCat = it.cat;                      // 下一個品項預設同一個分類
-      if (it.name) {                            // 換分類後，原本選的品名若不在這一類就清掉
-        const names = it.cat === ALL_CAT ? S.products.names : (S.products.byCat.get(it.cat) || []);
-        if (!names.includes(it.name)) { it.name = ''; it.row = null; }
-      }
-      renderItems();
-    });
-
-    row.querySelector('.itemName').onchange = e => {
-      it.name = e.target.value;
-      it.row = null; it.spec = '';
-      const vs = S.products.byName.get(it.name) || [];
-      // 只有一種規格就自動選好
-      if (vs.length === 1) { it.row = vs[0].sheetRow; it.price = vs[0].price; it.spec = vs[0].spec; }
-      renderItems(); updateTotal();
-    };
-    row.querySelector('.itemSpec').onchange = e => {
-      it.row = +e.target.value || null;
-      const p = it.row ? S.products.byRow.get(it.row) : null;
-      if (p) { it.price = p.price; it.cat = p.cat; it.name = p.name; it.spec = p.spec; }
-      renderItems(); updateTotal();
-    };
-    row.querySelector('.itemSrc').onchange = e => {
-      it.src = e.target.value;
-      S.lastSrc = it.src;                       // 下一個品項預設同一個出貨來源
-      renderItems();
-    };
-    row.querySelector('.itemQty').oninput = e => {
-      it.qty = Math.max(1, +e.target.value || 1);
-      updateTotal(); syncSub(row, it);
-    };
-    const pr = row.querySelector('.itemPrice');
-    if (pr) pr.oninput = e => { it.price = Math.max(0, +e.target.value || 0); updateTotal(); syncSub(row, it); };
-    const del = row.querySelector('.del');
-    if (del) del.onclick = () => { FORM.items.splice(i, 1); renderItems(); updateTotal(); };
-  });
-  updateTotal();
-}
-
 function syncSub(row, it) {
   const el = row.querySelector('.r2 .f:nth-child(3) input');
   if (el) el.value = money(it.qty * it.price);
 }
-function formTotal() { return FORM.items.reduce((s, i) => s + (i.qty * i.price), 0); }
+function formTotal() {
+  return itemsFromGroups(FORM.groups).reduce((s, i) => s + (i.qty * i.price), 0);
+}
 /** 預訂單的折扣：不能是負的，也不能大於品項合計（銷貨金額不會變負數） */
 function formDisc(gross) {
   const g = gross === undefined ? formTotal() : gross;
@@ -1712,9 +1662,8 @@ async function submitForm() {
   } else {
     if (!(FORM.cName || '').trim()) return alert('請填寫客戶名稱');
     if (!FORM.date) return alert('請選擇預計取貨日期');
-    const items = FORM.items.filter(i => i.row).map(i =>
-      ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, price: i.price, src: i.src || DEFAULT_SRC() }));
-    if (!items.length) return alert('請選擇預訂品項：先選「產品名稱」，再選「產品規格」');
+    const items = itemsFromGroups(FORM.groups);
+    if (!items.length) return alert('請填寫預訂數量：選好產品名稱後，在要訂的規格後面填數字');
 
     plan = planReserve(items);
     const gross = formTotal(), disc = formDisc(gross);
