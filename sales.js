@@ -62,7 +62,7 @@ const SH_HEAD = {
   mini: ['id', '訂單日期', '建立時間', '建立者', '銷售小賣', '客戶名稱', '小賣自取', '電話', '取貨方式',
          '訂單內容', '價格', '運費', '成本', '寄送方式', '店名',
          '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '獎金', '備註',
-         '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態'],
+         '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態', '應收貨款'],
   dist: ['id', '訂單日期', '建立時間', '建立者', '經銷名稱', '經銷聯絡電話', '訂單內容', '價格', '運費', '成本',
          '寄送方式', '收貨門市', '收貨人', '收貨人電話',
          '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '備註',
@@ -410,12 +410,12 @@ function openSaleForm(kind) {
     kind, date: kind === 'shop' ? openDay(store0) : todayStr(), staff: defaultStaff(),
     store: store0,
     groups: [newSpecGroup()],
-    cName: '', tel: '', note: '', fee: '', discount: '', payStatus: SALES.PAY[0], payDate: '',
+    cName: '', tel: '', note: '', noteTags: [], fee: '', bonus: '', discount: '', payStatus: SALES.PAY[0], payDate: '',
     collect: SALES.COLLECT_COD,        // 網路單預設貨到付款
     payWay: SALES.PAYWAY[0],           // 來店單：現金／匯款
     noStock: '',                       // 網路單庫存處理：'' = 照 onSrc 扣；agent／order = 不扣
     onSrc: CONFIG.H.warehouse,         // 網路單從哪裡出貨（總倉／三重店／西門店）
-    miniName: (SALE.lists.mini[0] || {}).name || '', selfPick: false, pickup: SALES.PICKUP[0],
+    miniName: (SALE.lists.mini[0] || {}).name || '', selfPick: false, pickup: SALES.PICKUP[0], restock: false,
     sendWay: SALES.SEND_WAY[0], storeName: '', shipCode: '',
     distName: (SALE.lists.dist[0] || {}).name || '', distTel: '',
     dSendWay: SALES.DIST_SEND_WAY[0], useDefault: true, rShop: '', rAddr: '', rName: '', rTel: '',
@@ -476,6 +476,14 @@ function codeField() {
     <div class="hint-row">客人自己開的寄件單，代號填這裡就好，不用填店名、收貨門市或地址</div></div>`;
 }
 
+/** 小賣店取（三重店取／西門店取）→ 那間門市的名稱；寄送回空字串 */
+const pickStore = p => SALES.PICK_STORE[p] || '';
+/** 這張小賣單現在適不適用「請協助從總倉備貨」 */
+function canRestock() {
+  const f = SALE.form;
+  return !!(f && f.kind === 'mini' && pickStore(f.pickup));
+}
+
 function pickupOptions() {
   const f = SALE.form;
   return f && f.selfPick ? SALES.PICKUP.filter(p => p !== '寄送') : SALES.PICKUP;
@@ -513,6 +521,7 @@ function renderSaleBody() {
   const dateField = `<div class="field"><label>訂單日期 <span class="req">*</span></label>
       <input type="date" id="fDate2" value="${f.date}"></div>`;
   const noteField = `<div class="field"><label>備註</label>
+      ${noteTagsField('noteTags', f.noteTags)}
       <textarea id="fNote2" placeholder="特殊狀況、客人交代的事">${sEsc(f.note)}</textarea></div>`;
   const payFields = `
     <div class="field"><label>結帳狀態 <span class="req">*</span></label>
@@ -569,7 +578,14 @@ function renderSaleBody() {
       <div class="field"><label>取貨方式 <span class="req">*</span></label>
         <div class="chips big-chips" id="pickChips">
           ${pickupOptions().map(p => `<button class="chip${p === f.pickup ? ' on' : ''}" data-pick="${p}">${p}</button>`).join('')}
-        </div>${f.selfPick ? '<div class="hint-row">小賣自取 → 只能選店取，「寄送」已隱藏</div>' : ''}${srcNote()}</div>`
+        </div>${f.selfPick ? '<div class="hint-row">小賣自取 → 只能選店取，「寄送」已隱藏</div>' : ''}${srcNote()}
+        ${canRestock() ? `<div style="margin-top:10px">
+          <label class="check-inline${f.restock ? ' on' : ''}">
+            <input type="checkbox" id="fRestock" ${f.restock ? 'checked' : ''}>🚚 請協助從總倉備貨</label>
+          <div class="hint-row">${f.restock
+            ? `送出後會<b>自動開一張備貨單</b>，把同樣的貨從<b>總倉</b>調到 <b>${sEsc(pickStore(f.pickup))}</b>，把賣掉的補回來。`
+            : `這張單的貨是直接從 <b>${sEsc(pickStore(f.pickup))}</b> 扣的。門市要補貨就勾這個。`}</div>
+        </div>` : ''}</div>`
       + itemsBlock()
       + (f.pickup === '寄送' ? `
         <div class="field"><label>寄送方式</label>
@@ -579,7 +595,7 @@ function renderSaleBody() {
         ${byCode(f.sendWay) ? codeField()
           : `<div class="field"><label>店名</label><input type="text" id="fStoreName" value="${sEsc(f.storeName)}"></div>`}
         ${feeField}` : '')
-      + payFields + staffField + noteField;
+      + bonusBlock() + payFields + staffField + noteField;
   }
 
   if (f.kind === 'dist') {
@@ -618,6 +634,35 @@ function payWayField() {
     </div></div>`;
 }
 
+/** 小賣單專用：銷貨金額 − 銷售獎金 = 應收貨款（實際要跟小賣收的錢） */
+function bonusBlock() {
+  const f = SALE.form;
+  if (f.kind !== 'mini') return '';
+  return `<div class="field"><label>銷售獎金</label>
+    ${numIn('fBonus', f.bonus, '0')}
+    <div class="bonus-box" id="bonusBox">
+      <span class="bl">銷貨金額 <b id="bnGross">NT$0</b>　−　獎金 <b id="bnFee">NT$0</b></span>
+      <span class="br">應收貨款 <b id="bnNet">NT$0</b></span>
+    </div>
+    <div class="hint-row">開單時可以先留空，之後在「小賣應收待結」再補；那邊填獎金或應收貨款其中一個，另一個會自動算。</div></div>`;
+}
+/** 小賣：表單上的銷貨金額（品項合計＋運費）、獎金、應收貨款 */
+function bonusNums() {
+  const f = SALE.form;
+  const gross = itemsTotal(saleItemList()) + (Number(f.fee) || 0);
+  const bonus = Math.min(Math.max(0, Math.round(Number(f.bonus) || 0)), Math.max(0, gross));
+  return { gross, bonus, net: gross - bonus };
+}
+function updateBonus() {
+  if (!SALE.form || SALE.form.kind !== 'mini') return;
+  const n = bonusNums();
+  const g = $('bnGross'), b = $('bnFee'), t = $('bnNet'), box = $('bonusBox');
+  if (g) g.textContent = money(n.gross);
+  if (b) b.textContent = money(n.bonus);
+  if (t) t.textContent = money(n.net);
+  if (box) box.classList.toggle('has', n.bonus > 0);
+}
+
 function itemsBlock() {
   const f = SALE.form;
   const disc = HAS_DISCOUNT(f.kind) ? `
@@ -639,6 +684,7 @@ function wireSaleBody() {
   on('fDate2', 'oninput', e => { f.date = e.target.value; f.dateTouched = true; });
   on('fStaff', 'onchange', e => f.staff = e.target.value);
   on('fNote2', 'oninput', e => f.note = e.target.value);
+  wireNoteTags('noteTags', () => f.noteTags, t => f.noteTags = t);
   on('fCName', 'oninput', e => f.cName = e.target.value);
   on('fPayDate', 'oninput', e => f.payDate = e.target.value);
   on('fStoreName', 'oninput', e => f.storeName = e.target.value);
@@ -649,7 +695,8 @@ function wireSaleBody() {
   document.querySelectorAll('.fTel').forEach(el => el.oninput = e => f.tel = e.target.value);
   document.querySelectorAll('.fDistTel').forEach(el => el.oninput = e => f.distTel = e.target.value);
   document.querySelectorAll('.fRTel').forEach(el => el.oninput = e => f.rTel = e.target.value);
-  document.querySelectorAll('.fFee').forEach(el => el.oninput = e => f.fee = e.target.value);
+  document.querySelectorAll('.fFee').forEach(el => el.oninput = e => { f.fee = e.target.value; updateBonus(); });
+  document.querySelectorAll('.fBonus').forEach(el => el.oninput = e => { f.bonus = e.target.value; updateBonus(); });
   document.querySelectorAll('.fDisc').forEach(el => el.oninput = e => { f.discount = e.target.value; saleTotal(); });
 
   document.querySelectorAll('#storeChips2 .chip').forEach(c => c.onclick = () => {
@@ -676,6 +723,7 @@ function wireSaleBody() {
   });
   document.querySelectorAll('#dwayChips .chip').forEach(c => c.onclick = () => { f.dSendWay = c.dataset.dway; renderSaleBody(); });
 
+  on('fRestock', 'onchange', e => { f.restock = e.target.checked; renderSaleBody(); });
   on('fSelf', 'onchange', e => {
     f.selfPick = e.target.checked;
     // 勾了小賣自取就沒有「寄送」這個選項了，原本選寄送的自動切回店取
@@ -802,6 +850,7 @@ function saleTotal() {
   const ne = $('saleNet'), bar = $('netBar');
   if (ne) ne.textContent = money(gross - d);
   if (bar) bar.classList.toggle('has', d > 0);
+  updateBonus();
 }
 
 /* ----------------------------- 送出銷售單 ------------------------------ */
@@ -854,6 +903,9 @@ async function submitSale() {
         　收貨人：<b>${sEsc(f.rName.trim()) || '（未填）'}</b></p>` : ''}
       ${k === 'online' ? `<p style="font-size:14px;color:var(--ink-2)">寄送方式：<b>${sEsc(f.sendWay)}</b>${f.storeName.trim() ? `　店名：<b>${sEsc(f.storeName.trim())}</b>` : '　（店名未填）'}<br>
         結帳狀態：<b>${sEsc(f.collect)}</b> → 試算表記「<b>${f.collect === SALES.COLLECT_PAID ? '已結帳' : '未結帳'}</b>」</p>` : ''}
+      ${canRestock() && f.restock ? `<div class="alert-box">🚚 送出後會<b>自動開一張備貨單</b>，
+        把同樣的貨從<b>總倉</b>調到 <b>${sEsc(pickStore(f.pickup))}</b>。<br>
+        <span style="font-weight:400;font-size:13px">這張小賣單是從門市扣貨的，備貨單送到門市後按「備貨完成」，門市的數量才會補回來。</span></div>` : ''}
       ${short.length ? `<div class="warn-box">⚠ 以下品項在${sEsc(srcLabel(src))}庫存不足，送出後會變負數：<br>
         ${short.map(i => `・${sEsc(i.name)} ${sEsc(i.spec)}`).join('<br>')}</div>` : ''}`,
     okText: '確定送出'
@@ -869,7 +921,7 @@ async function submitSale() {
     const isSelf = k === 'mini' && f.selfPick;
 
     set('id', id); set('訂單日期', f.date); set('建立時間', nowStr()); set('建立者', userName());
-    set('負責業務', f.staff); set('備註', f.note.trim()); set('成本', cost); set('狀態', '有效');
+    set('負責業務', f.staff); set('備註', joinNote(f.noteTags, f.note)); set('成本', cost); set('狀態', '有效');
     set('品項JSON', JSON.stringify(items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, price: i.price, gift: i.gift || '' }))));
     // 不扣庫存的單：庫存異動JSON 留空陣列，之後作廢／退貨才不會把貨「還」回去
     set('庫存異動JSON', noStock ? '[]'
@@ -911,6 +963,8 @@ async function submitSale() {
       set('店名', isSelf ? na : (posting && !code ? f.storeName.trim() : na));
       if (code) set('寄件代碼', f.shipCode.trim());
       if (isSelf) { set('結帳狀態', f.payStatus); }
+      const bn = bonusNums();
+      set('獎金', bn.bonus || ''); set('應收貨款', bn.net);
     }
     if (k === 'dist') {
       set('經銷名稱', f.distName); set('經銷聯絡電話', f.distTel.trim());
@@ -924,11 +978,31 @@ async function submitSale() {
 
     await appendRow(SALE.titles[k], v);
     if (!noStock) await applyPlan(items, 'sell');
+
+    // 小賣店取勾了「請協助從總倉備貨」：再開一張真的會動庫存的備貨單
+    let restock = null;
+    const wantRestock = canRestock() && f.restock;
+    const toStore = pickStore(f.pickup);
+    if (wantRestock && window.createRestockOrder) {
+      try {
+        restock = await window.createRestockOrder({
+          items, store: toStore, date: f.date, saleId: id,
+          note: `配合小賣單「${f.miniName}${f.cName.trim() ? ' ' + f.cName.trim() : ''}」（${id}）`
+            + `從總倉補貨到 ${toStore}。這批貨已經從門市賣出去了，`
+            + `這張單按「備貨完成」之後，門市的數量才會補回來。`
+        });
+      } catch (err) {
+        alert('小賣單已經送出了，但自動開立備貨單失敗：\n\n' + err.message
+          + '\n\n請到工作留言板手動開一張備貨單，把貨從總倉調到 ' + toStore + '。');
+      }
+    }
+
     $('modalHost').innerHTML = ''; SALE.form = null;
     await loadSales(); await loadProducts();
     SALE.view = 'home'; renderSales();
     toast(noStock ? `${SALES.LABEL[k]}銷售單已送出（${tags.join('、')}，未扣庫存）`
-                  : `${SALES.LABEL[k]}銷售單已送出，庫存已扣`, 'ok');
+      : restock ? `${SALES.LABEL[k]}銷售單已送出，並開了一張從總倉補貨到 ${toStore} 的備貨單`
+        : `${SALES.LABEL[k]}銷售單已送出，庫存已扣`, 'ok');
   } catch (err) {
     alert('送出失敗：\n\n' + err.message);
   } finally {
@@ -1148,9 +1222,11 @@ function openSaleEdit(kind, r) {
   f.date = r['訂單日期'] || todayStr();
   f.dateTouched = true;               // 改單時日期照單子上的走，不要被日結蓋掉
   f.staff = r['負責業務'] || '';
-  f.note = r['備註'] || '';
+  f.note = splitNote(r['備註']).text;
+  f.noteTags = splitNote(r['備註']).tags;
   f.fee = r['運費'] === '' || r['運費'] === undefined ? '' : String(r['運費']);
   f.discount = rowDisc(r) ? String(rowDisc(r)) : '';
+  f.bonus = bonusOf(r) ? String(bonusOf(r)) : '';
   // 同樣要用「名稱＋規格」找回產品，不能信單子上記的列號
   const lost = [];
   const list = items.map(i => {
@@ -1251,6 +1327,7 @@ function shopDiff(r, f, items) {
   }
   if (k === 'mini') {
     cmp('銷售小賣', r['銷售小賣'], f.miniName); cmp('取貨方式', r['取貨方式'], f.pickup);
+    cmp('銷售獎金', bonusOf(r), bonusNums().bonus);
     cmp('小賣自取', r['小賣自取'], f.selfPick ? '是' : '否');
   }
   if (k === 'dist') {
@@ -1259,7 +1336,7 @@ function shopDiff(r, f, items) {
   }
   if (k !== 'shop') { cmp('運費', r['運費'], f.fee === '' ? '' : String(Number(f.fee) || 0)); }
   cmp('負責業務', r['負責業務'], f.staff);
-  cmp('備註', r['備註'], f.note.trim());
+  cmp('備註', r['備註'], joinNote(f.noteTags, f.note));
   const oldT = itemsText(parseJSON(r['品項JSON'], []));
   const newT = itemsText(items);
   if (oldT !== newT) out.push(`品項：\n${oldT || '（空）'}\n→\n${newT}`);
@@ -1316,7 +1393,7 @@ async function submitShopEdit() {
     const disc = HAS_DISCOUNT(k) ? discountOf(gross) : 0;
     const total = gross - disc;
     const patch = {
-      訂單日期: f.date, 負責業務: f.staff, 備註: f.note.trim(), 成本: costOf(items),
+      訂單日期: f.date, 負責業務: f.staff, 備註: joinNote(f.noteTags, f.note), 成本: costOf(items),
       品項JSON: JSON.stringify(items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, price: i.price, gift: i.gift || '' }))),
       庫存異動JSON: frozen ? '[]' : JSON.stringify(newPlan)
     };
@@ -1329,8 +1406,10 @@ async function submitShopEdit() {
       });
     } else {
       Object.assign(patch, { 訂單內容: itemsText(items), 價格: total, 運費: Number(f.fee) || 0 });
-      patch['備註'] = (f.note.trim() ? f.note.trim() + ' / ' : '')
-        + `${nowStr()} ${userName()} 修改：${diff.join('；').replace(/\n/g, ' ')}`;
+      // 標籤要留在最前面，修改紀錄接在文字後面
+      patch['備註'] = joinNote(f.noteTags,
+        (f.note.trim() ? f.note.trim() + ' / ' : '')
+        + `${nowStr()} ${userName()} 修改：${diff.join('；').replace(/\n/g, ' ')}`);
     }
     if (k === 'online') {
       // 「已收貨款」一定是已結帳；但「貨到付款」不可以把<b>已經收到的錢</b>改回未結帳——
@@ -1355,6 +1434,8 @@ async function submitShopEdit() {
         店名: isSelf ? SALES.NA : (posting && !byCode(f.sendWay) ? f.storeName.trim() : SALES.NA),
         結帳狀態: f.payStatus, 結帳日: f.payDate
       });
+      const bn = bonusNums();
+      patch['獎金'] = bn.bonus || ''; patch['應收貨款'] = bn.net;
       if (posting && byCode(f.sendWay)) patch['寄件代碼'] = f.shipCode.trim();
     }
     if (k === 'dist') {
@@ -1436,7 +1517,19 @@ function recvWho(r, kind) {
     : kind === 'mini' ? r['銷售小賣']
       : r['客戶名稱']) || '（未填）').trim() || '（未填）';
 }
-const owedOf = r => (Number(r['價格']) || 0) + (Number(r['運費']) || 0);
+/* ---- 小賣的獎金與應收貨款 ---------------------------------------------
+   銷貨金額（價格＋運費）− 銷售獎金 = 應收貨款，
+   也就是實際上還要跟這個小賣收多少錢。                                */
+const grossOf = r => (Number(r['價格']) || 0) + (Number(r['運費']) || 0);
+const bonusOf = r => Math.max(0, Number(r['獎金']) || 0);
+/** 這張單實際要收的錢：小賣看應收貨款，其他單別就是銷貨金額 */
+function owedOf(r) {
+  const gross = grossOf(r);
+  if (r._kind !== 'mini') return gross;
+  const v = String(r['應收貨款'] ?? '').trim();
+  if (v !== '') return Number(v) || 0;        // 已經填過就照填的算
+  return gross - bonusOf(r);
+}
 
 /** 第一層：依對象彙整，顯示未結金額。點進去才進第二層 */
 function renderRecv(kind) {
@@ -1703,6 +1796,7 @@ function recvCard(r, kind) {
       ${kind === 'dist' ? `　·　${sEsc((String(r['寄送方式']) === SALES.HOME_DELIVERY ? r['宅配地址'] : r['收貨門市']) || '')} ${sEsc(r['收貨人'] || '')} ${sEsc(r['收貨人電話'] || '')}` : ''}</div>
     <div class="rec-items">${sEsc(r['訂單內容'] || '')}</div>
     ${discLine(r, '價格')}
+    ${kind === 'mini' ? `<div class="bonus-line">銷貨金額 ${money(grossOf(r))}　−　銷售獎金 <b>${money(bonusOf(r))}</b>　→　應收貨款 <b>${money(owedOf(r))}</b></div>` : ''}
     ${r['備註'] ? `<div class="rec-meta">備註：${sEsc(r['備註'])}</div>` : ''}
     <div class="st-grid">
       <div><label>寄件狀態</label><select class="rSel" data-f="寄件狀態">${opts([SALES.NA].concat(SALES.SHIP), r['寄件狀態'])}</select></div>
@@ -1718,6 +1812,9 @@ function recvCard(r, kind) {
           <input class="rInp" data-f="${fld}" value="${sEsc(r[fld] || '')}"></div>`;
       })()}
       <div><label>運費</label><input class="rInp" data-f="運費" type="number" inputmode="decimal" value="${sEsc(r['運費'] || '')}"></div>
+      ${kind === 'mini' ? `
+        <div><label>銷售獎金</label><input class="rInp bn-in" data-f="獎金" type="number" inputmode="decimal" value="${sEsc(r['獎金'] ?? '')}" placeholder="0"></div>
+        <div><label>應收貨款</label><input class="rInp bn-in" data-f="應收貨款" type="number" inputmode="decimal" value="${sEsc(r['應收貨款'] ?? '')}" placeholder="${grossOf(r)}"></div>` : ''}
       <div><label>結帳狀態</label><select class="rSel" data-f="結帳狀態">${opts(SALES.PAY, r['結帳狀態'])}</select></div>
       <div><label>結帳日</label><input class="rInp" data-f="結帳日" type="date" value="${sEsc(r['結帳日'] || '')}"></div>
     </div>
@@ -1743,6 +1840,27 @@ function wireRecv(kind) {
       const ev = el.tagName === 'SELECT' ? 'onchange' : 'oninput';
       el[ev] = e => { patch[el.dataset.f] = e.target.value; };
     });
+    // 小賣：銷貨金額 − 獎金 = 應收貨款。填任一格，另一格自動補上，
+    // 兩個都會一起存回試算表，之後看哪一欄都對得起來。
+    if (kind === 'mini' && r) {
+      const gross = grossOf(r);
+      const bn = card.querySelector('.rInp[data-f="獎金"]');
+      const nt = card.querySelector('.rInp[data-f="應收貨款"]');
+      const clamp = v => Math.min(Math.max(0, Math.round(Number(v) || 0)), Math.max(0, gross));
+      if (bn && nt) {
+        bn.oninput = e => {
+          const v = clamp(e.target.value);
+          patch['獎金'] = v || ''; patch['應收貨款'] = gross - v;
+          nt.value = gross - v;
+        };
+        nt.oninput = e => {
+          const v = clamp(e.target.value);
+          patch['應收貨款'] = v; patch['獎金'] = (gross - v) || '';
+          bn.value = (gross - v) || '';
+        };
+      }
+    }
+
     // 狀態按鈕：點了直接存（連同旁邊還沒存的文字欄位一起），存完重畫，
     // 這樣按了「已寄出」之後「退貨入庫」才會馬上出現，不用先按一次儲存
     card.querySelectorAll('.pchip').forEach(b => b.onclick = async () => {

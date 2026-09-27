@@ -5,8 +5,8 @@
    ========================================================================= */
 
 /* ----------------------------- 版本 ------------------------------------ */
-const APP_VERSION = '3.8';          // 每次改版都會更新，畫面右上角看得到
-const APP_DATE = '2026-09-24';
+const APP_VERSION = '4.0';          // 每次改版都會更新，畫面右上角看得到
+const APP_DATE = '2026-09-27';
 
 /* ----------------------------- 設定區 -----------------------------------
    要改的東西都在這裡，下面的程式不用動。
@@ -70,6 +70,51 @@ const C = {}; BOARD_HEADERS.forEach((h, i) => C[h] = i);   // 欄位 → 索引
 const BOARD_LAST_COL = 'Z';
 /** 預訂單的收款方式（跟銷售模組的 SALES.PAYWAY 一致，出納對帳用） */
 const PAY_WAYS = ['現金', '匯款'];
+
+/* ---- 備註小標籤 ---------------------------------------------------------
+   每一種單的備註欄上面都有這排勾選，勾了就在備註最前面加上【標籤】。
+   存的還是原本的備註欄，不用多開欄位，卡片、試算表、查詢通通看得到。
+   注意：這只是「做記號」，不會動到任何金額；
+   網路單品項那個同名的「保固換貨」是<b>性質</b>，那個才會讓品項不計價。  */
+const NOTE_TAGS = ['保固換貨', '點數換購', '搭贈', '補差價'];
+
+/** 備註字串 → { tags:[勾選的標籤], text:'剩下的文字' } */
+function splitNote(note) {
+  let s = String(note == null ? '' : note);
+  const tags = [];
+  for (;;) {
+    const m = /^【([^】]*)】\s*/.exec(s);
+    if (!m || !NOTE_TAGS.includes(m[1]) || tags.includes(m[1])) break;
+    tags.push(m[1]);
+    s = s.slice(m[0].length);
+  }
+  return { tags, text: s };
+}
+/** { 勾選的標籤, 文字 } → 存進備註欄的字串（標籤一律照固定順序排在最前面） */
+function joinNote(tags, text) {
+  const t = NOTE_TAGS.filter(x => (tags || []).includes(x)).map(x => `【${x}】`).join('');
+  const body = String(text == null ? '' : text).trim();
+  return (t && body) ? `${t} ${body}` : (t || body);
+}
+/** 備註欄上面那排勾選（六種表單共用） */
+function noteTagsField(id, checked) {
+  return `<div class="tag-picks" id="${id}">
+    ${NOTE_TAGS.map(t => `<label class="tag-pick${(checked || []).includes(t) ? ' on' : ''}">
+      <input type="checkbox" value="${esc(t)}"${(checked || []).includes(t) ? ' checked' : ''}><span>${esc(t)}</span></label>`).join('')}
+  </div>`;
+}
+/** 接線：勾／取消時更新 state（onPick 收到新的標籤陣列） */
+function wireNoteTags(id, getTags, onPick) {
+  const host = document.getElementById(id);
+  if (!host) return;
+  host.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.onchange = () => {
+    const v = cb.value;
+    const cur = (getTags() || []).slice();
+    const next = cb.checked ? (cur.includes(v) ? cur : cur.concat(v)) : cur.filter(x => x !== v);
+    cb.closest('.tag-pick').classList.toggle('on', cb.checked);
+    onPick(NOTE_TAGS.filter(x => next.includes(x)));
+  });
+}
 
 /* ----------------------------- 狀態 ------------------------------------ */
 const S = {
@@ -751,6 +796,14 @@ function render() {
 
 function parseJSON(s, fb) { try { return JSON.parse(s); } catch (e) { return fb; } }
 
+/**
+ * 這張備貨單是不是「只是提醒送貨、自己不管庫存」的跟單？
+ * 判斷標準是**有沒有自己的庫存紀錄**，不能只看有沒有關聯單號——
+ * 小賣店取的補貨單也有關聯單號，但它是真的要把貨從總倉調到門市的。
+ */
+const noteOnlyStockup = r =>
+  !!String(r['關聯單號'] || '').trim() && !normPlan(parseJSON(r['庫存異動JSON'], [])).length;
+
 function cardHTML(r) {
   const t = r['類型'], done = r['狀態'] !== STATUS.OPEN;
   const tagCls = t === TYPES.ORDER ? 'tag-order' : t === TYPES.STOCKUP ? 'tag-stock'
@@ -780,7 +833,8 @@ function cardHTML(r) {
     }
   } else if (t === TYPES.STOCKUP) {
     const items = parseJSON(r['品項JSON'], []);
-    title = r['關聯單號'] ? `送貨到 ${esc(r['門市'])}` : `備貨 → ${esc(r['門市'])}`;
+    const noteOnly = noteOnlyStockup(r);
+    title = String(r['關聯單號'] || '').trim() ? `送貨到 ${esc(r['門市'])}` : `備貨 → ${esc(r['門市'])}`;
     body = `<dl class="kv">
         <dt>備貨日期</dt><dd><b>${esc(r['取貨日期'] || '—')}</b></dd>
         ${r['備註'] ? `<dt>備註</dt><dd>${esc(r['備註'])}</dd>` : ''}
@@ -789,13 +843,15 @@ function cardHTML(r) {
         ${items.map(i => `<div class="it"><b>${esc(i.name)}${i.spec ? '　' + esc(i.spec) : ''}</b>
             <span class="src">${esc(srcLabel(i.src))} 出</span><span>× ${i.qty}</span></div>`).join('')}
       </div>`;
-    if (r['關聯單號']) {
+    if (String(r['關聯單號'] || '').trim()) {
       body = `<div class="alert-box big">🚚 從總倉調度，請協助備貨
-        <span>客人在 ${esc(r['門市'])} 取貨，但貨在總倉。請把下面的貨送到門市。</span></div>` + body;
+        <span>${noteOnly
+          ? `客人在 ${esc(r['門市'])} 取貨，但貨在總倉。請把下面的貨送到門市。`
+          : `${esc(r['門市'])} 的貨已經賣掉了，請從總倉補這些貨過去。`}</span></div>` + body;
     }
     if (r['庫存狀態'] === STOCK.FAILED) {
       body += `<div class="note bad">⚠ 這張備貨單的庫存還沒扣成功。請按下面的「重試扣庫存」。</div>`;
-    } else if (r['關聯單號']) {
+    } else if (noteOnly) {
       if (!done) body += `<div class="note">這張單<b>不會動庫存</b>——貨已經在預訂單送出時預留好了。
         送到門市後按「已送達」就好，客人取貨請到那張預訂單按「確認取貨完成」。</div>`;
     } else if (!done && r['庫存狀態'] === STOCK.RESERVED) {
@@ -867,7 +923,7 @@ function cardHTML(r) {
       actions = r['庫存狀態'] === STOCK.FAILED
         ? `<button class="btn btn-sm btn-primary" data-act="retry" data-id="${esc(r.id)}">重試扣庫存</button>
            ${edit}<button class="btn btn-sm btn-danger" data-act="cancel" data-id="${esc(r.id)}">取消備貨</button>`
-        : `<button class="btn btn-sm btn-ok" data-act="transfer" data-id="${esc(r.id)}">✓ ${r['關聯單號'] ? '已送達門市' : '備貨完成'}</button>
+        : `<button class="btn btn-sm btn-ok" data-act="transfer" data-id="${esc(r.id)}">✓ ${noteOnlyStockup(r) ? '已送達門市' : '備貨完成'}</button>
            ${edit}<button class="btn btn-sm btn-danger" data-act="cancel" data-id="${esc(r.id)}">取消備貨</button>`;
     } else if (t === TYPES.ORDER) {
       if (r['庫存狀態'] === STOCK.FAILED) {
@@ -984,7 +1040,7 @@ document.addEventListener('click', async e => {
   if (act === 'transfer') {
     const plan = normPlan(parseJSON(r['庫存異動JSON'], []));
     const dest = storeCol(r['門市']);
-    const linked = !!r['關聯單號'];               // 跟著預訂單開的送貨提醒單：不動庫存
+    const linked = noteOnlyStockup(r);            // 跟著預訂單開的送貨提醒單：不動庫存
     const ok = await confirmModal({
       title: linked ? '貨已經送到門市了？' : '備貨已經送到門市了？',
       lines: linked
@@ -1183,7 +1239,8 @@ function openForm(editId) {
       slot: r['取貨時段'] || CONFIG.SLOTS[0],
       cName: r['客戶名稱'] || '',
       date: r['取貨日期'] || todayStr(),
-      note: r['備註'] || '',
+      note: splitNote(r['備註']).text,
+      noteTags: splitNote(r['備註']).tags,
       discount: ordDisc(r) ? String(ordDisc(r)) : '',
       payWay: ordPayWay(r),
       taskText: r['類型'] === TYPES.TASK ? (r['備註'] || '') : '',
@@ -1212,7 +1269,7 @@ function openForm(editId) {
       editId: null, type: TYPES.ORDER, store: CONFIG.STORES[0].label,
       source: CONFIG.SOURCES[0], slot: CONFIG.SLOTS[0], routines: [],
       reason: SCRAP_REASONS[0],
-      discount: '', payWay: PAY_WAYS[0],
+      discount: '', payWay: PAY_WAYS[0], noteTags: [],
       orderSrc: S.lastSrc || DEFAULT_SRC(), groups: [newGroup()]
     };
   }
@@ -1285,10 +1342,12 @@ function renderFormBody() {
         <div class="total-bar"><span>合計</span><span id="gTotal">0 項 · 0 件</span></div>
       </div>
       <div class="field"><label>備註</label>
+        ${noteTagsField('noteTags', FORM.noteTags)}
         <textarea id="fNote" placeholder="例如：週三送貨車一起帶過去">${esc(FORM.note || '')}</textarea></div>`;
     FORM.date = FORM.date || todayStr();
     $('fDate').oninput = e => FORM.date = e.target.value;
     $('fNote').oninput = e => FORM.note = e.target.value;
+    wireNoteTags('noteTags', () => FORM.noteTags, t => FORM.noteTags = t);
     $('addGroup').onclick = () => { FORM.groups.push(newGroup()); renderGroups(); };
     renderGroups();
     return;
@@ -1341,6 +1400,7 @@ function renderFormBody() {
         </div>
       </div>
       <div class="field"><label>補充說明（可不填）</label>
+        ${noteTagsField('noteTags', FORM.noteTags)}
         <textarea id="fRNote" placeholder="其他要提醒的事">${esc(FORM.note || '')}</textarea></div>`;
     b.querySelectorAll('#fRoutines input').forEach(cb => cb.onchange = () => {
       const v = CONFIG.ROUTINES[+cb.dataset.i];
@@ -1348,6 +1408,7 @@ function renderFormBody() {
       cb.closest('.check').classList.toggle('on', cb.checked);
     });
     $('fRNote').oninput = e => FORM.note = e.target.value;
+    wireNoteTags('noteTags', () => FORM.noteTags, t => FORM.noteTags = t);
     return;
   }
 
@@ -1388,9 +1449,11 @@ function renderFormBody() {
       </div>
       <div class="hint-row">取貨結案時會原封帶到來店銷售單，出納靠這個對帳</div></div>
     <div class="field"><label>備註</label>
+      ${noteTagsField('noteTags', FORM.noteTags)}
       <textarea id="fNote" placeholder="例如：客人說會晚點來、要換殼…">${esc(FORM.note || '')}</textarea></div>`;
 
   $('fName').oninput = e => FORM.cName = e.target.value;
+  wireNoteTags('noteTags', () => FORM.noteTags, t => FORM.noteTags = t);
   $('fDisc').oninput = e => { FORM.discount = e.target.value; updateTotal(); };
   b.querySelectorAll('#payWayChips .chip').forEach(c => c.onclick = () => {
     FORM.payWay = c.dataset.v;
@@ -1630,14 +1693,14 @@ async function submitForm() {
   } else if (t === TYPES.ROUTINE) {
     if (!FORM.routines.length) return alert('請至少勾選一項例行工作');
     f['例行工作項目'] = FORM.routines.join('\n');
-    f['備註'] = (FORM.note || '').trim();
+    f['備註'] = joinNote(FORM.noteTags, FORM.note);
   } else if (t === TYPES.STOCKUP) {
     if (!FORM.date) return alert('請選擇備貨日期');
     const items = itemsFromGroups(FORM.groups);
     if (!items.length) return alert('請填寫備貨數量：選好產品名稱後，在要備的規格後面填數字');
     plan = planReserve(items);
     f['取貨日期'] = FORM.date;
-    f['備註'] = (FORM.note || '').trim();
+    f['備註'] = joinNote(FORM.noteTags, FORM.note);
     f['品項明細'] = plan.map(p => `${p.name} ${p.spec} ×${p.qty}（${srcLabel(p.src)}出）`).join('\n');
     f['品項JSON'] = JSON.stringify(plan.map(p =>
       ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, price: 0, src: p.src })));
@@ -1653,7 +1716,7 @@ async function submitForm() {
     plan = planReserve(items);                 // 只是拿來解析品項＋算來源夠不夠，扣法另外走 scrap
     f['取貨日期'] = FORM.date;
     f['客戶來源'] = FORM.reason;               // 借「客戶來源」欄位存報廢原因，不用動試算表
-    f['備註'] = (FORM.note || '').trim();
+    f['備註'] = joinNote(FORM.noteTags, FORM.note);
     f['品項明細'] = plan.map(p => `${p.name} ${p.spec} ×${p.qty}（${srcLabel(p.src)}扣）`).join('\n');
     f['品項JSON'] = JSON.stringify(plan.map(p =>
       ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, price: 0, src: p.src })));
@@ -1676,7 +1739,7 @@ async function submitForm() {
     f['折扣'] = disc;              // 沒折扣就寫 0（不是空白），修改紀錄才看得懂「250 → 0」
     f['未折金額'] = gross;
     f['收款方式'] = FORM.payWay || PAY_WAYS[0];
-    f['備註'] = (FORM.note || '').trim();
+    f['備註'] = joinNote(FORM.noteTags, FORM.note);
     f['品項明細'] = plan.map(p => `${p.name} ${p.spec} ×${p.qty}（${srcLabel(p.src)}出）`).join('\n');
     f['品項JSON'] = JSON.stringify(plan.map(p =>
       ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, price: p.price, src: p.src })));
@@ -1900,6 +1963,50 @@ async function submitForm() {
  * 預訂單有品項從總倉出貨時，自動開一張「跟單備貨單」提醒把貨送到門市。
  * 這張單【不動庫存】——貨已經在預訂單送出時移到預定專區了，再扣一次會重複。
  */
+/**
+ * 小賣店取單勾了「請協助從總倉備貨」時，順便開一張<b>真的會動庫存</b>的備貨單。
+ *
+ * 跟預訂單那張提醒用的跟單完全不一樣：
+ * 小賣店取是直接從<b>門市</b>扣貨賣掉的，總倉一毛都沒動，
+ * 所以這張單要真的把貨從總倉調到門市，門市的數字才補得回來。
+ *   送出時   總倉 −N、預定專區 +N（總數不變）
+ *   備貨完成 預定專區 −N、門市 +N（總數不變）
+ * 整套跑完：總倉 −N、門市 ±0、總數 −N（就是賣掉的那 N 個）。
+ */
+window.createRestockOrder = async function (opt) {
+  const src = CONFIG.H.warehouse;
+  const want = (opt.items || [])
+    .filter(i => i.row && Number(i.qty) > 0)
+    .map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: Number(i.qty), src }));
+  if (!want.length) return null;
+  const plan = planReserve(want);
+  const gone = plan.filter(p => p.missing);
+  if (gone.length) throw new Error('這些品項在庫存表找不到：' + gone.map(p => `${p.name} ${p.spec}`).join('、'));
+
+  const id = 'S' + Date.now().toString(36).toUpperCase();
+  const v = new Array(BOARD_HEADERS.length).fill('');
+  const set = (k, x) => { if (C[k] !== undefined) v[C[k]] = x; };
+  set('id', id); set('類型', TYPES.STOCKUP);
+  set('建立時間', nowStr()); set('建立者', userName());
+  set('門市', opt.store); set('狀態', STATUS.OPEN);
+  set('取貨日期', opt.date || todayStr());
+  set('品項明細', plan.map(p => `${p.name} ${p.spec} ×${p.qty}（總倉出）`).join('\n'));
+  set('品項JSON', JSON.stringify(plan.map(p =>
+    ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, price: 0, src: p.src }))));
+  set('庫存異動JSON', JSON.stringify(plan.map(p =>
+    ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, src: p.src }))));
+  set('庫存狀態', STOCK.FAILED);              // 扣成功再改成「已預留」
+  set('關聯單號', opt.saleId || '');
+  set('備註', opt.note || '');
+  await appendRow(S.boardTitle, v);
+  await applyPlan(plan, 'reserve');
+  await loadBoard();
+  const nr = (S.board || []).find(x => x.id === id);
+  if (nr) await updateBoardRow(nr, { 庫存狀態: STOCK.RESERVED });
+  render();          // 留言板那邊馬上看得到，不用等下一次自動更新
+  return { id, plan };
+};
+
 async function createCompanionStockup(orderId, whItems) {
   const values = new Array(BOARD_HEADERS.length).fill('');
   const id = 'S' + Date.now().toString(36).toUpperCase();

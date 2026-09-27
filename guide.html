@@ -494,6 +494,53 @@ body{margin:0}
 </section>
 
 <section>
+  <h2>備註小標籤</h2>
+  <p class="lede">每一種單的備註欄上面都有一排勾選，可以複選。</p>
+  <p style="font-size:15px"><b>保固換貨</b> · <b>點數換購</b> · <b>搭贈</b> · <b>補差價</b></p>
+  <p style="font-size:15px">勾了之後會在備註最前面加上【標籤】，例如 <code>【保固換貨】【補差價】 客人拿舊機來換</code>。存的還是<b>原本的備註欄</b>，不用多開欄位，卡片、試算表、「查詢」通通看得到。改單時會把勾選狀態帶回來，取消勾選標籤就跟著消失。</p>
+  <p style="font-size:15px">預訂單、備貨單、例行工作補充說明，還有四種銷售單都有。報廢單本來就有自己的「報廢原因」，不重複加。</p>
+  <div class="why">
+    <b>跟「品項性質」不一樣，別搞混</b>
+    <p>網路單品項底下那個「保固換貨」是<b>性質</b>，選了會讓那一項<b>不計價、不計成本</b>。備註標籤只是<b>做記號</b>，完全不影響金額。<br>要讓某一項不算錢 → 用品項的「性質」；只是想註記這張單的狀況 → 用備註標籤。</p>
+  </div>
+</section>
+
+<section>
+  <h2>小賣店取：請協助從總倉備貨</h2>
+  <p class="lede">小賣單選「三重店取」或「西門店取」時，下面會多一個勾選 <b>🚚 請協助從總倉備貨</b>。這張單的貨是<b>直接從門市扣走</b>的，門市賣掉之後要從總倉補回來，就勾這個。</p>
+  <div class="flow" style="margin-top:22px">
+    <div class="step out"><span class="dot">1</span><div><h4>小賣單送出</h4><p class="when">門市的庫存扣掉，總數減少</p>
+      <div class="deltas"><div><span class="lab">門市</span><span class="val minus">− N</span></div>
+      <div><span class="lab">總數</span><span class="val minus">− N</span></div></div></div></div>
+    <div class="step hold"><span class="dot">2</span><div><h4>自動開一張備貨單</h4><p class="when">出現在工作留言板的「待備貨」</p>
+      <div class="deltas"><div><span class="lab">總倉</span><span class="val minus">− N</span></div>
+      <div><span class="lab">預定專區</span><span class="val plus">＋ N</span></div>
+      <div><span class="lab">總數</span><span class="val flat">不變</span></div></div></div></div>
+    <div class="step hold"><span class="dot">3</span><div><h4>送到門市，按「備貨完成」</h4><p class="when">門市的數量補回來了</p>
+      <div class="deltas"><div><span class="lab">預定專區</span><span class="val minus">− N</span></div>
+      <div><span class="lab">門市</span><span class="val out-val">＋ N</span></div>
+      <div><span class="lab">總數</span><span class="val flat">不變</span></div></div></div></div>
+  </div>
+  <p style="font-size:15px;margin-top:20px">整條跑完就是 <b>總倉 −N、門市回到原樣、總數 −N</b>——也就是賣掉的那 N 個。</p>
+  <div class="why">
+    <b>跟預訂單那張跟單不一樣</b>
+    <p>預訂單開的「送貨到門市」是<b>提醒單，不會動庫存</b>（貨在開預訂單的時候就預留好了）。小賣這張是<b>真的會動庫存</b>的備貨單，因為小賣是從門市扣貨的，總倉根本還沒動——不補的話門市的數字就少了。</p>
+  </div>
+  <p style="font-size:15px">選「寄送」就沒有這個選項，因為寄送本來就是從總倉出貨。不勾的話行為跟以前完全一樣，不會多開任何單子。</p>
+</section>
+
+<section>
+  <h2>小賣：銷售獎金與應收貨款</h2>
+  <p class="lede">銷貨金額（價格 ＋ 運費） − 銷售獎金 = 應收貨款。應收貨款就是實際上還要跟這個小賣收多少錢。</p>
+  <dl class="fields">
+    <div><dt>開單時</dt><dd>金額合計下面有 <b>銷售獎金</b>，填了下面會馬上算出應收貨款。<b>可以先留空</b>，之後再補。</dd></div>
+    <div><dt>事後補</dt><dd>到「小賣應收待結」點進那張單，<b>填銷售獎金或應收貨款其中一個，另一個會自動算出來</b>，按「儲存變更」兩欄會一起存回試算表。</dd></div>
+    <div><dt>未結金額</dt><dd>小賣應收待結上面的總數，看的是 <b>應收貨款</b>（已經扣掉獎金）。沒填獎金的單跟以前完全一樣。</dd></div>
+    <div><dt>不影響什麼</dt><dd>獎金<b>不會</b>動到價格、成本和庫存，只影響「要跟小賣收多少錢」。</dd></div>
+  </dl>
+</section>
+
+<section>
   <h2>今天賣了什麼</h2>
   <p class="lede">「銷售紀錄」首頁下方，把<b>今天</b>開的每一張單逐筆列出來。</p>
   <p style="font-size:15px">每一行顯示：時間 · 單別 · 對象 · 品項 · 結帳狀態 · 負責業務 · 金額。最上面那排是今天的總筆數和總金額。作廢和退貨的單會變灰、金額畫刪節線，<b>不算進合計</b>。</p>

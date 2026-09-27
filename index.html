@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="3.8">
+<meta name="app-version" content="4.0">
 <title>西門龍門儀錶板</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -504,6 +504,26 @@ textarea{min-height:84px;resize:vertical}
 .stage-bar .stg b.sm{flex:1 1 100%;font-size:11.5px;font-weight:700;color:var(--ink-2);
   font-variant-numeric:tabular-nums}
 .stage-bar .stg.on b.sm{color:var(--brand)}
+
+/* ---------- 備註小標籤 ---------- */
+.tag-picks{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:8px}
+.tag-pick{display:inline-flex;align-items:center;gap:5px;border:1.5px solid var(--line);
+  background:#fff;border-radius:999px;padding:5px 12px;font-size:13px;font-weight:500;
+  color:var(--ink-2);cursor:pointer;user-select:none;-webkit-user-select:none}
+.tag-pick input{margin:0;width:15px;height:15px;accent-color:var(--brand)}
+.tag-pick.on{border-color:var(--brand);background:var(--brand-soft);color:var(--brand);font-weight:700}
+
+/* ---------- 小賣：銷售獎金 → 應收貨款 ---------- */
+.bonus-box{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-top:8px;
+  padding:9px 12px;border-radius:10px;background:#f8fafc;border:1px solid var(--line);
+  font-size:13px;color:var(--ink-2)}
+.bonus-box.has{background:#eff6ff;border-color:#bfdbfe}
+.bonus-box .bl b{color:var(--ink);font-variant-numeric:tabular-nums}
+.bonus-box .br{margin-left:auto;font-weight:700;color:var(--ink-2);white-space:nowrap}
+.bonus-box .br b{font-size:16px;color:var(--brand);font-variant-numeric:tabular-nums}
+.bonus-line{margin-top:6px;padding:7px 10px;border-radius:8px;background:#eff6ff;
+  border:1px solid #bfdbfe;font-size:12.5px;color:#1e40af;font-variant-numeric:tabular-nums}
+.bonus-line b{color:#1d4ed8}
 .rec-card.pick{padding:12px 14px}
 .pick-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:2px}
 .pick-head .nm{font-weight:700;font-size:16px;flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
@@ -672,7 +692,7 @@ textarea{min-height:84px;resize:vertical}
 <div id="toastHost"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="app.js?v=3.8"></script>
-<script src="sales.js?v=3.8"></script>
+<script src="app.js?v=4.0"></script>
+<script src="sales.js?v=4.0"></script>
 </body>
 </html>
