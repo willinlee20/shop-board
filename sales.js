@@ -455,11 +455,19 @@ function saleSrc() {
 /** 網路單勾了「廠商代出」或「待調貨」就不扣庫存 */
 function noStockTags() {
   const f = SALE.form;
-  if (!f || f.kind !== 'online' || !f.noStock) return [];
+  if (!f) return [];
+  // 來店單勾了「銷售紀錄補登」：貨老早就出去了，這張單只是補打紀錄，一毛庫存都不能動
+  if (f.kind === 'shop') return isBackfill() ? [BACKFILL_TAG] : [];
+  if (f.kind !== 'online' || !f.noStock) return [];
   const hit = SALES.NOSTOCK.find(o => o.key === f.noStock);
   return hit ? [hit.tag] : [];
 }
 const skipStock = () => noStockTags().length > 0;
+/** 這張來店單是不是「補登」（備註標籤勾了銷售紀錄補登） */
+function isBackfill() {
+  const f = SALE.form;
+  return !!(f && f.kind === 'shop' && hasBackfill(f.noteTags));
+}
 
 /** 小賣可選的取貨方式：勾了「小賣自取」就沒有寄送 */
 /* ---- 收件者提供寄件代號 -------------------------------------------------
@@ -489,6 +497,10 @@ function pickupOptions() {
   return f && f.selfPick ? SALES.PICKUP.filter(p => p !== '寄送') : SALES.PICKUP;
 }
 function srcNote() {
+  if (isBackfill()) {
+    return `<div class="hint-row backfill">📝 <b>紀錄補登，不扣庫存</b>　
+      這張單只補業績和金額，庫存完全不動（貨已經出去了）</div>`;
+  }
   return `<div class="hint-row">這張單的庫存會扣在 <b>${sEsc(srcLabel(saleSrc()))}</b></div>`;
 }
 
@@ -521,7 +533,7 @@ function renderSaleBody() {
   const dateField = `<div class="field"><label>訂單日期 <span class="req">*</span></label>
       <input type="date" id="fDate2" value="${f.date}"></div>`;
   const noteField = `<div class="field"><label>備註</label>
-      ${noteTagsField('noteTags', f.noteTags)}
+      ${noteTagsField('noteTags', f.noteTags, f.kind === 'shop' ? NOTE_TAGS : BASIC_TAGS)}
       <textarea id="fNote2" placeholder="特殊狀況、客人交代的事">${sEsc(f.note)}</textarea></div>`;
   const payFields = `
     <div class="field"><label>結帳狀態 <span class="req">*</span></label>
@@ -684,7 +696,11 @@ function wireSaleBody() {
   on('fDate2', 'oninput', e => { f.date = e.target.value; f.dateTouched = true; });
   on('fStaff', 'onchange', e => f.staff = e.target.value);
   on('fNote2', 'oninput', e => f.note = e.target.value);
-  wireNoteTags('noteTags', () => f.noteTags, t => f.noteTags = t);
+  wireNoteTags('noteTags', () => f.noteTags, t => {
+    const was = isBackfill();
+    f.noteTags = t;
+    if (f.kind === 'shop' && was !== isBackfill()) renderSaleBody();   // 提示文字要換
+  });
   on('fCName', 'oninput', e => f.cName = e.target.value);
   on('fPayDate', 'oninput', e => f.payDate = e.target.value);
   on('fStoreName', 'oninput', e => f.storeName = e.target.value);
@@ -883,11 +899,17 @@ async function submitSale() {
 
   const ok = await confirmModal({
     title: `確認這張${SALES.LABEL[k]}銷售單`,
-    lines: `${noStock
-        ? `<div class="alert-box">🚫 這張單<b>不扣庫存</b>（${sEsc(tags.join('、'))}）<br>
-             <span style="font-weight:400;font-size:13px">貨不是從我們倉庫出的，所以只記錄銷售、營收和成本，庫存數字完全不動。</span></div>
+    lines: `${isBackfill()
+        ? `<div class="alert-box">📝 <b>銷售紀錄補登</b>——這張單<b>完全不扣庫存</b><br>
+             <span style="font-weight:400;font-size:13px">貨早就出去了，這只是把漏打的單補起來。
+             業績、金額、成本照記，庫存數字一個都不會動。</span></div>
+           <p style="font-size:15px">補登日期：<b>${sEsc(f.date)}</b>　門市：<b>${sEsc(f.store)}</b></p>
            <p style="font-size:14px;color:var(--ink-2)">這張單的內容：</p>`
-        : `<p style="font-size:14px;color:var(--ink-2)">送出後會直接從 <b>${sEsc(srcLabel(src))}</b> 扣掉庫存（總數減少）：</p>`}
+        : noStock
+          ? `<div class="alert-box">🚫 這張單<b>不扣庫存</b>（${sEsc(tags.join('、'))}）<br>
+               <span style="font-weight:400;font-size:13px">貨不是從我們倉庫出的，所以只記錄銷售、營收和成本，庫存數字完全不動。</span></div>
+             <p style="font-size:14px;color:var(--ink-2)">這張單的內容：</p>`
+          : `<p style="font-size:14px;color:var(--ink-2)">送出後會直接從 <b>${sEsc(srcLabel(src))}</b> 扣掉庫存（總數減少）：</p>`}
       <pre class="pre">${esc(items.map(i => `・${i.name} ${i.spec} ×${i.qty}　${isGift(i) ? i.gift + '（不計價）' : money(i.price * i.qty)}`).join('\n'))}</pre>
       ${disc
         ? `<p style="font-size:15px">合計 ${money(gross)}　折扣 <b style="color:var(--danger,#dc2626)">− ${money(disc)}</b><br>
@@ -932,7 +954,8 @@ async function submitSale() {
 
     if (k === 'shop') {
       set('門市', f.store); set('品項明細', itemsText(items)); set('金額', total);
-      set('庫存狀態', '已扣庫存'); set('收款方式', f.payWay);
+      set('庫存狀態', noStock ? `不扣（${tags.join('、')}）` : '已扣庫存');
+      set('收款方式', f.payWay);
     } else {
       set('訂單內容', itemsText(items)); set('價格', total); set('運費', Number(f.fee) || 0);
       set('結帳狀態', f.payStatus); set('結帳日', f.payDate);
@@ -1059,6 +1082,8 @@ window.createShopSaleFromOrder = async function (r) {
 const shopVoided = r => String(r['狀態']) === SALES.VOID;
 const shopArchived = r => String(r['封存']) === '是';
 const shopLinked = r => !!String(r['關聯單號'] || '').trim();
+/** 已存檔的來店單是不是補登單（送出時記在庫存狀態裡） */
+const rowBackfill = r => String(r['庫存狀態'] || '').includes(BACKFILL_TAG);
 
 function renderShopLog() {
   SALE.view = 'shoplog';
@@ -1149,6 +1174,7 @@ function shopCard(r) {
     ${discLine(r, '金額')}
     ${r['備註'] ? `<div class="rec-meta">備註：${sEsc(r['備註'])}</div>` : ''}
     ${linked ? `<div class="note">🔗 由預訂單 ${sEsc(r['關聯單號'])} 自動產生，<b>不扣庫存</b>。品項要改請回留言板改那張預訂單。</div>` : ''}
+    ${rowBackfill(r) ? `<div class="note">📝 <b>銷售紀錄補登</b>——這張單<b>沒有扣庫存</b>，只補業績和金額。</div>` : ''}
     ${voided ? `<div class="note">已作廢，庫存${parseJSON(r['庫存異動JSON'], []).length ? '已退回' : '本來就沒扣'}。</div>` : ''}
     ${r['最後修改時間'] ? `<div class="rec-meta">✎ 最後修改：${sEsc(r['最後修改者'])} ${sEsc(r['最後修改時間'])}</div>` : ''}
     ${String(r['修改紀錄'] || '').trim() ? `<details class="chg"><summary>修改紀錄</summary>
@@ -1317,7 +1343,10 @@ function shopDiff(r, f, items) {
   };
   const k = f.kind;
   cmp('訂單日期', r['訂單日期'], f.date);
-  if (k === 'shop') { cmp('門市', r['門市'], f.store); cmp('收款方式', r['收款方式'] || SALES.PAYWAY[0], f.payWay); }
+  if (k === 'shop') {
+    cmp('門市', r['門市'], f.store); cmp('收款方式', r['收款方式'] || SALES.PAYWAY[0], f.payWay);
+    cmp('庫存處理', r['庫存狀態'], skipStock() ? `不扣（${noStockTags().join('、')}）` : '已扣庫存');
+  }
   if (k === 'online' || k === 'mini') { cmp('客戶名稱', r['客戶名稱'], f.cName.trim()); cmp('電話', r['電話'], f.tel.trim()); }
   if (k === 'online') {
     cmp('寄送方式', r['寄送方式'], f.sendWay); cmp('店名', r['店名'], f.storeName.trim());
@@ -1363,7 +1392,7 @@ async function submitShopEdit() {
 
   // 這張單現在還扣不扣庫存
   const linked = k === 'shop' && shopLinked(r);
-  const noStock = k === 'online' && skipStock();
+  const noStock = skipStock();          // 網路的廠商代出／待調貨，或來店的銷售紀錄補登
   const frozen = linked || noStock;
   const oldPlan = normPlan(parseJSON(r['庫存異動JSON'], []));
   const newPlan = frozen ? [] : items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, src: i.src }));
@@ -1401,6 +1430,8 @@ async function submitShopEdit() {
     if (k === 'shop') {
       Object.assign(patch, {
         門市: f.store, 品項明細: itemsText(items), 金額: total, 收款方式: f.payWay,
+        庫存狀態: linked ? (r['庫存狀態'] || '不扣（來自預訂單）')
+          : noStock ? `不扣（${noStockTags().join('、')}）` : '已扣庫存',
         最後修改時間: nowStr(), 最後修改者: userName(),
         修改紀錄: (String(r['修改紀錄'] || '') + `\n${nowStr()} ${userName()}：${diff.join('；').replace(/\n/g, ' ')}`).trim()
       });

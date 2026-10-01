@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="4.0">
+<meta name="app-version" content="4.1">
 <title>西門龍門儀錶板</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -513,6 +513,14 @@ textarea{min-height:84px;resize:vertical}
 .tag-pick input{margin:0;width:15px;height:15px;accent-color:var(--brand)}
 .tag-pick.on{border-color:var(--brand);background:var(--brand-soft);color:var(--brand);font-weight:700}
 
+/* 第五個標籤「銷售紀錄補登」會真的影響庫存，用顏色跟前四個分開 */
+.tag-pick.backfill{border-style:dashed}
+.tag-pick.backfill input{accent-color:#b45309}
+.tag-pick.backfill.on{border-color:#d97706;background:var(--warn-soft);color:#b45309;border-style:solid}
+.hint-row.backfill{background:var(--warn-soft);border:1px solid #fcd34d;border-radius:8px;
+  padding:7px 10px;color:#92400e;font-size:12.5px;line-height:1.6}
+.hint-row.backfill b{color:#b45309}
+
 /* ---------- 小賣：銷售獎金 → 應收貨款 ---------- */
 .bonus-box{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-top:8px;
   padding:9px 12px;border-radius:10px;background:#f8fafc;border:1px solid var(--line);
@@ -692,7 +700,7 @@ textarea{min-height:84px;resize:vertical}
 <div id="toastHost"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="app.js?v=4.0"></script>
-<script src="sales.js?v=4.0"></script>
+<script src="app.js?v=4.1"></script>
+<script src="sales.js?v=4.1"></script>
 </body>
 </html>

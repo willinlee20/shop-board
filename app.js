@@ -5,8 +5,8 @@
    ========================================================================= */
 
 /* ----------------------------- 版本 ------------------------------------ */
-const APP_VERSION = '4.0';          // 每次改版都會更新，畫面右上角看得到
-const APP_DATE = '2026-09-27';
+const APP_VERSION = '4.1';          // 每次改版都會更新，畫面右上角看得到
+const APP_DATE = '2026-10-01';
 
 /* ----------------------------- 設定區 -----------------------------------
    要改的東西都在這裡，下面的程式不用動。
@@ -76,7 +76,15 @@ const PAY_WAYS = ['現金', '匯款'];
    存的還是原本的備註欄，不用多開欄位，卡片、試算表、查詢通通看得到。
    注意：這只是「做記號」，不會動到任何金額；
    網路單品項那個同名的「保固換貨」是<b>性質</b>，那個才會讓品項不計價。  */
-const NOTE_TAGS = ['保固換貨', '點數換購', '搭贈', '補差價'];
+const NOTE_TAGS = ['保固換貨', '點數換購', '搭贈', '補差價', '銷售紀錄補登'];
+/**
+ * 前四個標籤只是做記號，不影響任何金額或庫存。
+ * 「銷售紀錄補登」不一樣——它只出現在<b>來店銷售單</b>，
+ * 勾了之後那張單<b>完全不扣庫存</b>（貨早就賣出去了，只是補打單），
+ * 但業績、金額、日期照記。
+ */
+const BACKFILL_TAG = '銷售紀錄補登';
+const BASIC_TAGS = NOTE_TAGS.filter(t => t !== BACKFILL_TAG);
 
 /** 備註字串 → { tags:[勾選的標籤], text:'剩下的文字' } */
 function splitNote(note) {
@@ -97,9 +105,9 @@ function joinNote(tags, text) {
   return (t && body) ? `${t} ${body}` : (t || body);
 }
 /** 備註欄上面那排勾選（六種表單共用） */
-function noteTagsField(id, checked) {
+function noteTagsField(id, checked, list) {
   return `<div class="tag-picks" id="${id}">
-    ${NOTE_TAGS.map(t => `<label class="tag-pick${(checked || []).includes(t) ? ' on' : ''}">
+    ${(list || BASIC_TAGS).map(t => `<label class="tag-pick${t === BACKFILL_TAG ? ' backfill' : ''}${(checked || []).includes(t) ? ' on' : ''}">
       <input type="checkbox" value="${esc(t)}"${(checked || []).includes(t) ? ' checked' : ''}><span>${esc(t)}</span></label>`).join('')}
   </div>`;
 }
@@ -115,6 +123,8 @@ function wireNoteTags(id, getTags, onPick) {
     onPick(NOTE_TAGS.filter(x => next.includes(x)));
   });
 }
+/** 這張單有沒有勾「銷售紀錄補登」 */
+const hasBackfill = tags => (tags || []).includes(BACKFILL_TAG);
 
 /* ----------------------------- 狀態 ------------------------------------ */
 const S = {
