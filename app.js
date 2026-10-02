@@ -5,8 +5,8 @@
    ========================================================================= */
 
 /* ----------------------------- 版本 ------------------------------------ */
-const APP_VERSION = '4.1';          // 每次改版都會更新，畫面右上角看得到
-const APP_DATE = '2026-10-01';
+const APP_VERSION = '4.2';          // 每次改版都會更新，畫面右上角看得到
+const APP_DATE = '2026-10-02';
 
 /* ----------------------------- 設定區 -----------------------------------
    要改的東西都在這裡，下面的程式不用動。
@@ -51,10 +51,15 @@ const CONFIG = {
   POLL_SECONDS: 45          // 每幾秒自動抓一次新留言
 };
 
-const TYPES = { ORDER: '客戶預訂單', STOCKUP: '備貨', SCRAP: '報廢', TASK: '任務交接', ROUTINE: '例行工作' };
+const TYPES = { ORDER: '客戶預訂單', STOCKUP: '備貨', PURCHASE: '進貨需求', SCRAP: '報廢',
+                TASK: '任務交接', ROUTINE: '例行工作' };
+/** 進貨需求可以不指定門市（公司層級的需求） */
+const NO_STORE = '不指定';
 const STATUS = { OPEN: '待處理', DONE: '已完成', CANCEL: '已取消' };
 const STOCK = { RESERVED: '已預留', SHIPPED: '已出庫', TRANSFERRED: '已轉入門市', RESTORED: '已還原',
-                SCRAPPED: '已報廢扣除', UNSCRAPPED: '報廢已復原', FAILED: '未扣', NA: '不適用' };
+                SCRAPPED: '已報廢扣除', UNSCRAPPED: '報廢已復原',
+                RECEIVED: '已入庫（總倉）', MANUAL: '待倉庫主管手動入庫',
+                FAILED: '未扣', NA: '不適用' };
 /** 報廢原因：選一個最接近的，細節寫在說明欄 */
 const SCRAP_REASONS = ['破損／瑕疵', '過期', '試抽／教育訓練', '遺失／短少', '客訴換貨', '盤點差異', '其他'];
 
@@ -648,8 +653,8 @@ async function applyPlan(plan, mode, dest) {
     } else if (mode === 'sell' || mode === 'scrap') {
       // 銷售單 / 報廢：直接從來源扣掉（不經過預定專區），總數會真的變少
       add(row, src, -p.qty);
-    } else if (mode === 'unsell' || mode === 'unscrap') {
-      // 退貨入庫 / 銷售單作廢 / 報廢復原：原路加回去
+    } else if (mode === 'unsell' || mode === 'unscrap' || mode === 'receive') {
+      // 退貨入庫 / 銷售單作廢 / 報廢復原 / 進貨入庫：把貨加進來
       add(row, src, +p.qty);
     }
   }
@@ -756,6 +761,7 @@ function planText(plan, mode, dest) {
     if (mode === 'sell') return `・${name} ×${p.qty}　${src} −${p.qty}（出售，總數減少）`;
     if (mode === 'scrap') return `・${name} ×${p.qty}　${src} −${p.qty}（報廢，總數減少）`;
     if (mode === 'unscrap') return `・${name} ×${p.qty}　${src} +${p.qty}（報廢復原，加回去）`;
+    if (mode === 'receive') return `・${name} ×${p.qty}　${src} +${p.qty}（進貨入庫，總數增加）`;
     if (mode === 'unsell') return `・${name} ×${p.qty}　${src} +${p.qty}（回補庫存）`;
     return `・${name} ×${p.qty}　預定專區 −${p.qty} → ${srcLabel(dest || p.src)} +${p.qty}`;
   }).join('\n');
@@ -764,7 +770,8 @@ function planText(plan, mode, dest) {
 /* ----------------------------- 畫面渲染 -------------------------------- */
 function render() {
   const store = S.filterStore;
-  const rows = S.board.filter(r => store === '全部' || r['門市'] === store);
+  // 「不指定」的進貨需求是全公司的事，篩哪一間門市都要看得到
+  const rows = S.board.filter(r => store === '全部' || r['門市'] === store || r['門市'] === NO_STORE);
   const open = rows.filter(r => r['狀態'] === STATUS.OPEN);
 
   // 待取貨的預訂單：依取貨日期＋時段從最早排到最晚
@@ -773,11 +780,14 @@ function render() {
   // 待備貨：依日期排序
   const stockups = open.filter(r => r['類型'] === TYPES.STOCKUP)
     .sort((a, b) => String(a['取貨日期']).localeCompare(String(b['取貨日期'])));
+  // 待進貨：依需求日期排序
+  const buys = open.filter(r => r['類型'] === TYPES.PURCHASE)
+    .sort((a, b) => String(a['取貨日期']).localeCompare(String(b['取貨日期'])));
   // 報廢正常情況下送出就完成了，會留在這裡的都是「庫存還沒扣成功」的，要醒目
   const scraps = open.filter(r => r['類型'] === TYPES.SCRAP).reverse();
   // 交接事項：最新的在最上面
   const notes = open.filter(r => r['類型'] !== TYPES.ORDER && r['類型'] !== TYPES.STOCKUP
-    && r['類型'] !== TYPES.SCRAP).reverse();
+    && r['類型'] !== TYPES.SCRAP && r['類型'] !== TYPES.PURCHASE).reverse();
   const closed = rows.filter(r => r['狀態'] !== STATUS.OPEN).reverse().slice(0, 40);
 
   $('pendingCount').textContent = `待處理 ${open.length}`;
@@ -791,6 +801,9 @@ function render() {
   }
   if (stockups.length) {
     html += `<div class="sec-title">待備貨（${stockups.length}）· 依日期排序</div>` + stockups.map(cardHTML).join('');
+  }
+  if (buys.length) {
+    html += `<div class="sec-title">待進貨（${buys.length}）· 依需求日期排序</div>` + buys.map(cardHTML).join('');
   }
   if (scraps.length) {
     html += `<div class="sec-title">報廢：庫存還沒扣成功（${scraps.length}）· 請處理</div>` + scraps.map(cardHTML).join('');
@@ -817,7 +830,8 @@ const noteOnlyStockup = r =>
 function cardHTML(r) {
   const t = r['類型'], done = r['狀態'] !== STATUS.OPEN;
   const tagCls = t === TYPES.ORDER ? 'tag-order' : t === TYPES.STOCKUP ? 'tag-stock'
-    : t === TYPES.SCRAP ? 'tag-scrap' : t === TYPES.TASK ? 'tag-task' : 'tag-routine';
+    : t === TYPES.PURCHASE ? 'tag-buy' : t === TYPES.SCRAP ? 'tag-scrap'
+      : t === TYPES.TASK ? 'tag-task' : 'tag-routine';
   let title = '', body = '';
 
   if (t === TYPES.ORDER) {
@@ -866,6 +880,28 @@ function cardHTML(r) {
         送到門市後按「已送達」就好，客人取貨請到那張預訂單按「確認取貨完成」。</div>`;
     } else if (!done && r['庫存狀態'] === STOCK.RESERVED) {
       body += `<div class="note">貨已經從來源移到「預定專區」等著送出。實際送到門市後按「備貨完成」，就會轉進 ${esc(r['門市'])} 的庫存（總數不變）。</div>`;
+    }
+  } else if (t === TYPES.PURCHASE) {
+    const items = parseJSON(r['品項JSON'], []);
+    const pieces = items.reduce((s, i) => s + (Number(i.qty) || 0), 0);
+    title = items.length ? `進貨需求 ${pieces} 件` : '進貨需求';
+    body = `<dl class="kv">
+        <dt>需求日期</dt><dd><b>${esc(r['取貨日期'] || '—')}</b></dd>
+        ${r['客戶名稱'] ? `<dt>客戶</dt><dd><b>${esc(r['客戶名稱'])}</b></dd>` : ''}
+        ${r['備註'] ? `<dt>備註</dt><dd style="white-space:pre-wrap">${esc(r['備註'])}</dd>` : ''}
+      </dl>
+      ${items.length ? `<div class="items">
+        ${items.map(i => `<div class="it"><b>${esc(i.name)}${i.spec ? '　' + esc(i.spec) : ''}</b>
+            <span>× ${i.qty}</span></div>`).join('')}
+        <div class="it sum"><span>共需要</span><span>${pieces} 件</span></div>
+      </div>` : `<div class="note">沒有填現有品項——需求寫在備註裡（公司現有庫存外的產品）。</div>`}`;
+    if (r['庫存狀態'] === STOCK.RECEIVED) {
+      body += `<div class="note">📦 已確認<b>與需求相同並直接入庫</b>，貨已經加進<b>總倉</b>了。</div>`;
+    } else if (r['庫存狀態'] === STOCK.MANUAL) {
+      body += `<div class="note bad">⚠ 實際進貨跟需求<b>不一樣</b>，這張單<b>沒有自動入庫</b>——
+        請<b>倉庫主管手動把正確的數量加進庫存表</b>。</div>`;
+    } else if (!done) {
+      body += `<div class="note">貨到了之後按「✓ 確認完成」，可以選擇<b>直接入庫到總倉</b>，或是交給倉庫主管手動處理。</div>`;
     }
   } else if (t === TYPES.SCRAP) {
     const items = parseJSON(r['品項JSON'], []);
@@ -928,6 +964,9 @@ function cardHTML(r) {
     } else if (r['狀態'] === STATUS.CANCEL) {
       actions = `<button class="btn btn-sm btn-danger" data-act="del" data-id="${esc(r.id)}">🗑 刪除這筆紀錄</button>`;
     }
+  } else if (t === TYPES.PURCHASE && !done) {
+    actions = `<button class="btn btn-sm btn-ok" data-act="receive" data-id="${esc(r.id)}">✓ 確認完成</button>
+      ${edit}<button class="btn btn-sm btn-danger" data-act="cancel" data-id="${esc(r.id)}">取消這筆需求</button>`;
   } else if (!done) {
     if (t === TYPES.STOCKUP) {
       actions = r['庫存狀態'] === STOCK.FAILED
@@ -1014,10 +1053,13 @@ document.addEventListener('click', async e => {
     const reserved = r['庫存狀態'] === STOCK.RESERVED;
     const isStock = r['類型'] === TYPES.STOCKUP;
     const isScrap = r['類型'] === TYPES.SCRAP;
+    const isBuy = r['類型'] === TYPES.PURCHASE;
     const backHome = [...new Set(plan.map(p => srcLabel(p.src)))].join('、') || '原來源';
     const res = await confirmModal({
-      title: isScrap ? '要取消這張報廢單嗎？' : isStock ? '要取消這張備貨單嗎？' : '要取消這張預訂單嗎？',
-      lines: `<p>${isScrap ? '報廢原因：<b>' + esc(r['客戶來源'] || '—') + '</b>'
+      title: isBuy ? '要取消這筆進貨需求嗎？' : isScrap ? '要取消這張報廢單嗎？'
+        : isStock ? '要取消這張備貨單嗎？' : '要取消這張預訂單嗎？',
+      lines: `<p>${isBuy ? (r['客戶名稱'] ? '客戶：<b>' + esc(r['客戶名稱']) + '</b>' : '門市：<b>' + esc(r['門市']) + '</b>')
+                : isScrap ? '報廢原因：<b>' + esc(r['客戶來源'] || '—') + '</b>'
                 : isStock ? '備貨去向：<b>' + esc(r['門市']) + '</b>'
                 : '客戶：<b>' + esc(r['客戶名稱'] || '（無）') + '</b>'}</p>` +
         (reserved
@@ -1040,7 +1082,7 @@ document.addEventListener('click', async e => {
         // 本來就沒扣成功的單（庫存狀態＝未扣）不要假裝「已還原」，維持原樣才看得出真相
         庫存狀態: reserved ? STOCK.RESTORED : (r['庫存狀態'] || STOCK.NA),
         修改紀錄: (r['修改紀錄'] ? r['修改紀錄'] + '\n' : '')
-          + `${nowStr()} ${userName()}：取消${isScrap ? '報廢' : isStock ? '備貨' : '預訂'}${reserved ? `，庫存退回 ${res.dest ? srcLabel(res.dest) : backHome}` : '（庫存未動）'}`
+          + `${nowStr()} ${userName()}：取消${isBuy ? '進貨需求' : isScrap ? '報廢' : isStock ? '備貨' : '預訂'}${reserved ? `，庫存退回 ${res.dest ? srcLabel(res.dest) : backHome}` : '（庫存未動）'}`
       });
       toast(reserved ? '已取消，庫存已退回 ' + (res.dest ? srcLabel(res.dest) : backHome) : '已取消（庫存未動）', 'ok');
     });
@@ -1075,6 +1117,49 @@ document.addEventListener('click', async e => {
         庫存狀態: linked ? STOCK.NA : STOCK.TRANSFERRED
       });
       toast(linked ? '已標記送達 ' + r['門市'] : '備貨完成，已轉入 ' + r['門市'], 'ok');
+    });
+  }
+
+  // 進貨需求確認完成：兩個選項——直接入庫，或交給倉庫主管手動處理
+  if (act === 'receive') {
+    const items = parseJSON(r['品項JSON'], []);
+    const plan = items.length
+      ? normPlan(items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, src: CONFIG.H.warehouse })))
+      : [];
+    const res = await confirmModal({
+      title: '這筆進貨需求處理完了？',
+      lines: `<p>${r['客戶名稱'] ? '客戶：<b>' + esc(r['客戶名稱']) + '</b>　' : ''}${esc(r['門市'])}　${esc(r['取貨日期'] || '')}</p>
+        ${r['備註'] ? `<pre class="pre">${esc(r['備註'])}</pre>` : ''}
+        ${plan.length ? '' : `<div class="alert-box">這張單<b>沒有填現有品項</b>（需求寫在備註），
+          所以沒有東西可以自動入庫。請選第二個選項，由倉庫主管處理。</div>`}
+        <p style="font-size:14px;color:var(--ink-2)">實際進貨跟這張需求單一樣嗎？</p>`,
+      choices: {
+        name: 'how',
+        options: [
+          { v: 'in', label: '與實際進貨需求相同，請直接入庫', off: !plan.length,
+            offNote: '這張單沒有填現有品項，沒有東西可以入庫' },
+          { v: 'manual', label: '與實際進貨不相同，請倉庫主管手動入庫' }
+        ]
+      },
+      preview: how => how === 'in'
+        ? `<p style="font-size:14px;color:var(--ink-2)">這些貨會<b>加進總倉</b>（總數增加）：</p>
+           <pre class="pre">${esc(planText(plan, 'receive'))}</pre>`
+        : `<div class="alert-box">這張單會標成完成，但<b>庫存一個數字都不會動</b>。<br>
+             請<b>倉庫主管依照實際到貨的數量，手動把庫存加進庫存表</b>。<br>
+             卡片上會留紅字提醒，之後查得到是誰按的。</div>`,
+      okText: '確定'
+    });
+    if (!res) return;
+    const putIn = res.how === 'in' && plan.length;
+    await doAction(b, async () => {
+      if (putIn) await applyPlan(plan, 'receive');
+      await updateBoardRow(r, {
+        狀態: STATUS.DONE, 完成時間: nowStr(), 完成者: userName(),
+        庫存狀態: putIn ? STOCK.RECEIVED : STOCK.MANUAL,
+        修改紀錄: (r['修改紀錄'] ? r['修改紀錄'] + '\n' : '')
+          + `${nowStr()} ${userName()}：${putIn ? '與需求相同，已直接入庫總倉' : '與實際進貨不同，待倉庫主管手動入庫'}`
+      });
+      toast(putIn ? '已入庫到總倉' : '已標記完成，請倉庫主管手動入庫', 'ok');
     });
   }
 
@@ -1178,7 +1263,13 @@ function confirmModal({ title, lines, okText, danger, choices, preview }) {
     const host = document.createElement('div');
     const chipsHTML = choices ? `<div class="field" style="margin-bottom:10px">
         <div class="chips" id="cmChips">
-          ${choices.options.map((o, i) => `<button class="chip ${i === 0 ? 'on' : ''}" data-v="${esc(o.v)}">${esc(o.label)}</button>`).join('')}
+          ${(() => {
+            const first = choices.options.findIndex(o => !o.off);
+            return choices.options.map((o, i) =>
+              `<button class="chip ${i === first ? 'on' : ''}${o.off ? ' off' : ''}"
+                 data-v="${esc(o.v)}"${o.off ? ' disabled title="' + esc(o.offNote || '這個選項現在不能用') + '"' : ''}
+                >${esc(o.label)}</button>`).join('');
+          })()}
         </div>
       </div>` : '';
     host.innerHTML = `<div class="modal">
@@ -1192,13 +1283,14 @@ function confirmModal({ title, lines, okText, danger, choices, preview }) {
       </div></div>`;
     document.body.appendChild(host);
 
-    let picked = choices ? choices.options[0].v : undefined;
+    let picked = choices ? (choices.options.find(o => !o.off) || choices.options[0]).v : undefined;
     const drawPreview = () => {
       const el = host.querySelector('#cmPreview');
       if (preview && el) el.innerHTML = preview(picked);
     };
     if (choices) {
       host.querySelectorAll('#cmChips .chip').forEach(c => c.onclick = () => {
+        if (c.disabled) return;
         picked = c.dataset.v;
         host.querySelectorAll('#cmChips .chip').forEach(x => x.classList.toggle('on', x === c));
         drawPreview();
@@ -1300,12 +1392,7 @@ function openForm(editId) {
                    ${Object.values(TYPES).map(t => `<button class="chip ${t === TYPES.ORDER ? 'on' : ''}" data-type="${t}">${t}</button>`).join('')}
                  </div>
                </div>`}
-        <div class="field">
-          <label>對應門市 <span class="req">*</span></label>
-          <div class="chips" id="storeChips">
-            ${CONFIG.STORES.map(s => `<button class="chip ${s.label === FORM.store ? 'on' : ''}" data-store="${s.label}">${s.label}</button>`).join('')}
-          </div>
-        </div>
+        <div id="storeRow">${storeRowHTML()}</div>
         <div id="formBody"></div>
       </div>
       <div class="sheet-foot">
@@ -1320,23 +1407,48 @@ function openForm(editId) {
     host.querySelectorAll('#typeChips .chip').forEach(c => c.onclick = () => {
       FORM.type = c.dataset.type;
       host.querySelectorAll('#typeChips .chip').forEach(x => x.classList.toggle('on', x === c));
+      // 進貨需求可以選「不指定」，其他類型不行，所以門市那一列也要重畫
+      if (!storeOptions().includes(FORM.store)) FORM.store = storeOptions()[0];
+      const row = $('storeRow');
+      if (row) { row.innerHTML = storeRowHTML(); wireStoreChips(); }
       renderFormBody();
     });
   }
-  host.querySelectorAll('#storeChips .chip').forEach(c => c.onclick = () => {
-    FORM.store = c.dataset.store;
-    host.querySelectorAll('#storeChips .chip').forEach(x => x.classList.toggle('on', x === c));
-    if (FORM.type === TYPES.ORDER) renderFormBody();
-  });
+  wireStoreChips();
   renderFormBody();
 }
 function closeForm() { $('modalHost').innerHTML = ''; FORM = null; }
+
+/** 這個類型可以選哪些門市（只有進貨需求多一個「不指定」） */
+function storeOptions() {
+  const list = CONFIG.STORES.map(s => s.label);
+  return FORM && FORM.type === TYPES.PURCHASE ? list.concat(NO_STORE) : list;
+}
+function storeRowHTML() {
+  const opt = FORM && FORM.type === TYPES.PURCHASE;
+  return `<div class="field">
+    <label>對應門市${opt ? '<span class="opt-note">選填</span>' : ' <span class="req">*</span>'}</label>
+    <div class="chips" id="storeChips">
+      ${storeOptions().map(x => `<button class="chip ${x === FORM.store ? 'on' : ''}" data-store="${esc(x)}">${esc(x)}</button>`).join('')}
+    </div>
+    ${opt ? '<div class="hint-row">哪一間要的就選哪一間；全公司共用的需求選「不指定」</div>' : ''}
+  </div>`;
+}
+function wireStoreChips() {
+  document.querySelectorAll('#storeChips .chip').forEach(c => c.onclick = () => {
+    FORM.store = c.dataset.store;
+    document.querySelectorAll('#storeChips .chip').forEach(x => x.classList.toggle('on', x === c));
+    if (FORM.type === TYPES.ORDER) renderFormBody();
+  });
+}
 /** 備貨用：一個群組 = 一支產品 + 一個出貨來源 + 各規格的數量 */
 function newGroup() {
   return { cat: S.lastCat || null, name: '', src: S.lastSrc || DEFAULT_SRC(), qty: {}, price: {} };
 }
 /** 預訂單整張單只有一個出貨來源（備貨單才是一個產品一個來源） */
 const oneSrc = () => FORM && FORM.type === TYPES.ORDER;
+/** 進貨需求：貨是從外面進來的，沒有「從哪裡出」，也不用填單價 */
+const isPurchase = () => FORM && FORM.type === TYPES.PURCHASE;
 const formSrc = () => (FORM && FORM.orderSrc) || DEFAULT_SRC();
 
 function renderFormBody() {
@@ -1388,6 +1500,34 @@ function renderFormBody() {
       FORM.reason = c.dataset.reason;
       b.querySelectorAll('#scrapChips .chip').forEach(x => x.classList.toggle('on', x === c));
     });
+    $('addGroup').onclick = () => { FORM.groups.push(newGroup()); renderGroups(); };
+    renderGroups();
+    return;
+  }
+
+  // ───── 進貨需求：全部欄位都選填，品項或備註有一個就能送 ─────
+  if (FORM.type === TYPES.PURCHASE) {
+    b.innerHTML = `
+      <div class="field"><label>需求日期<span class="opt-note">選填</span></label>
+        <input type="date" id="fDate" value="${FORM.date || todayStr()}"></div>
+      <div class="field"><label>客戶聯繫資訊<span class="opt-note">選填</span></label>
+        <input type="text" id="fName" placeholder="客人姓名／電話，例如：王先生 0912xxxxxx" value="${esc(FORM.cName || '')}">
+        <div class="hint-row">有客人在等的話填這裡，貨到了才知道要通知誰</div></div>
+      <div class="field"><label>進貨品項<span class="opt-note">選填</span></label>
+        <div id="groupRows"></div>
+        <button class="btn add-item" id="addGroup">＋ 增加另一個產品</button>
+        <div class="hint-row" style="margin-top:6px">公司現有的產品選這裡；<b>找不到的新產品不用填，直接寫在下面備註</b>。</div>
+        <div class="total-bar" style="margin-top:8px"><span>合計</span><span id="gTotal">0 項 · 0 件</span></div>
+      </div>
+      <div class="field"><label>備註<span class="opt-note">選填</span></label>
+        ${noteTagsField('noteTags', FORM.noteTags)}
+        <textarea id="fNote" placeholder="公司現有庫存外產品請填這裡">${esc(FORM.note || '')}</textarea></div>
+      <div class="hint-row"><b>品項和備註至少要填一個</b>才能送出。其他欄位都可以空白。</div>`;
+    FORM.date = FORM.date || todayStr();
+    $('fDate').oninput = e => FORM.date = e.target.value;
+    $('fName').oninput = e => FORM.cName = e.target.value;
+    $('fNote').oninput = e => FORM.note = e.target.value;
+    wireNoteTags('noteTags', () => FORM.noteTags, t => FORM.noteTags = t);
     $('addGroup').onclick = () => { FORM.groups.push(newGroup()); renderGroups(); };
     renderGroups();
     return;
@@ -1523,7 +1663,7 @@ function itemsFromGroups(groups) {
         const p = S.products.byRow.get(+row);
         items.push({ row: +row, name: p ? p.name : (g.name || ''), spec: p ? p.spec : '',
                      qty: n, price: Number((g.price || {})[row]) || 0,
-                     src: oneSrc() ? formSrc() : (g.src || DEFAULT_SRC()) });
+                     src: oneSrc() ? formSrc() : isPurchase() ? DEFAULT_SRC() : (g.src || DEFAULT_SRC()) });
       }
     }
   }
@@ -1554,12 +1694,13 @@ function renderGroups() {
   const host = $('groupRows');
   const P = S.products;
   const withPrice = oneSrc();                 // 預訂單才有單價欄
+  const withSrc = !oneSrc() && !isPurchase(); // 備貨／報廢才要選來源
 
   host.innerHTML = FORM.groups.map((g, i) => {
     const cat = g.cat || S.lastCat || (P.cats[0] || ALL_CAT);
     const names = (!P.hasCats || cat === ALL_CAT) ? P.names : (P.byCat.get(cat) || []);
     const variants = g.name ? (P.byName.get(g.name) || []) : [];
-    const src = oneSrc() ? formSrc() : (g.src || DEFAULT_SRC());
+    const src = oneSrc() ? formSrc() : isPurchase() ? DEFAULT_SRC() : (g.src || DEFAULT_SRC());
 
     const tabs = P.hasCats ? `<div class="cat-tabs">
         ${P.cats.map(c => `<button class="cat-tab${c === cat ? ' on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}
@@ -1572,7 +1713,7 @@ function renderGroups() {
         ${variants.map(v => {
           const have = v.nums[src] || 0;
           const q = g.qty[v.sheetRow] || '';
-          return `<div class="spec-row${q ? ' has' : ''}${q && q > have ? ' short' : ''}" data-row="${v.sheetRow}">
+          return `<div class="spec-row${q ? ' has' : ''}${!isPurchase() && q && q > have ? ' short' : ''}" data-row="${v.sheetRow}">
             <span class="nm">${esc(v.spec || '（無規格）')}</span>
             <span class="sq${have <= 0 ? ' zero' : ''}">${have}</span>
             ${qtyIn('gq', q, '0', 0, `data-row="${v.sheetRow}"`)}
@@ -1594,7 +1735,7 @@ function renderGroups() {
         </select>
       </div>
       ${specs}
-      ${oneSrc() ? '' : `<div class="f" style="margin-top:10px"><label>${FORM.type === TYPES.SCRAP ? '從哪裡扣掉這批貨' : '這批從哪裡出貨'}</label>
+      ${!withSrc ? '' : `<div class="f" style="margin-top:10px"><label>${FORM.type === TYPES.SCRAP ? '從哪裡扣掉這批貨' : '這批從哪裡出貨'}</label>
         <select class="gSrc">
           ${srcOptions().map(o => `<option value="${esc(o.col)}"${src === o.col ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}
         </select>
@@ -1641,7 +1782,7 @@ function renderGroups() {
         const rowEl = e.target.closest('.spec-row');
         rowEl.classList.toggle('has', !!n);
         const have = Number(rowEl.querySelector('.sq').textContent) || 0;
-        rowEl.classList.toggle('short', !!n && n > have);
+        rowEl.classList.toggle('short', !isPurchase() && !!n && n > have);
         const pe = rowEl.querySelector('.gp');
         if (pe && n && !pe.value) pe.value = g.price[r];
         updateGroupTotal();
@@ -1716,6 +1857,25 @@ async function submitForm() {
       ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, price: 0, src: p.src })));
     f['庫存異動JSON'] = JSON.stringify(plan.map(p =>
       ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, src: p.src })));
+  } else if (t === TYPES.PURCHASE) {
+    const items = itemsFromGroups(FORM.groups);
+    const note = joinNote(FORM.noteTags, FORM.note);
+    // 品項和備註至少要有一個——這種單常常是「公司沒有的東西，幫我問一下」
+    if (!items.length && !note.trim()) {
+      return alert('進貨品項和備註至少要填一個。\n\n'
+        + '公司現有的產品請在「進貨品項」選；找不到的新產品直接寫在備註就好。');
+    }
+    plan = items.length ? planReserve(items) : null;
+    f['取貨日期'] = FORM.date || todayStr();
+    f['客戶名稱'] = (FORM.cName || '').trim();
+    f['備註'] = note;
+    if (plan) {
+      f['品項明細'] = plan.map(p => `${p.name} ${p.spec} ×${p.qty}`).join('\n');
+      f['品項JSON'] = JSON.stringify(plan.map(p =>
+        ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, price: 0, src: p.src })));
+    }
+    // 開單當下不動任何庫存，等「確認完成」選了「直接入庫」才加
+    f['庫存異動JSON'] = '[]';
   } else if (t === TYPES.SCRAP) {
     if (FORM.editId) return alert('報廢單不能修改。如果打錯了，請在卡片上按「↩ 復原報廢」把庫存加回去，再重開一張。');
     if (!FORM.date) return alert('請選擇報廢日期');
@@ -1829,7 +1989,7 @@ async function submitForm() {
 
   if (!editing) {
     let wantStockup = null;              // 要不要順便開一張「從總倉調度」的備貨單
-    if (plan) {
+    if (plan && t !== TYPES.PURCHASE) {
       const isStock = t === TYPES.STOCKUP;
       const fromWh = isStock ? [] : plan.filter(p => p.src === CONFIG.H.warehouse);
       const whHTML = fromWh.length ? `<div class="alert-box">🚚 <b>從總倉調度，請協助備貨</b><br>
@@ -1869,13 +2029,14 @@ async function submitForm() {
     values[C['建立時間']] = nowStr();
     values[C['建立者']] = userName();
     values[C['狀態']] = STATUS.OPEN;
-    values[C['庫存狀態']] = plan ? STOCK.FAILED : STOCK.NA;   // 先記未扣，扣成功後改「已預留」
+    // 進貨需求開單當下不動庫存，所以是「不適用」，不是「未扣」
+    values[C['庫存狀態']] = (plan && t !== TYPES.PURCHASE) ? STOCK.FAILED : STOCK.NA;
     Object.keys(f).forEach(k => { if (C[k] !== undefined) values[C[k]] = f[k]; });
 
     S.busy = true; btn.disabled = true; btn.textContent = '送出中…';
     try {
       await appendRow(S.boardTitle, values);
-      if (plan) {
+      if (plan && t !== TYPES.PURCHASE) {
         try {
           await applyPlan(plan, 'reserve');
           await loadBoard();
@@ -1902,8 +2063,9 @@ async function submitForm() {
 
   /* ══════════════ 修改 ══════════════ */
   const LABEL = {
-    客戶名稱: '客戶名稱', 客戶來源: '客戶來源',
-    取貨日期: (t === TYPES.STOCKUP ? '備貨日期' : '取貨日期'), 取貨時段: '取貨時段',
+    客戶名稱: (t === TYPES.PURCHASE ? '客戶聯繫資訊' : '客戶名稱'), 客戶來源: '客戶來源',
+    取貨日期: (t === TYPES.STOCKUP ? '備貨日期' : t === TYPES.PURCHASE ? '需求日期' : '取貨日期'),
+    取貨時段: '取貨時段',
     金額: '銷貨金額', 折扣: '折扣', 收款方式: '收款方式',
     備註: (t === TYPES.TASK ? '交接內容' : '備註'),
     品項明細: '品項', 例行工作項目: '例行工作', 門市: (t === TYPES.STOCKUP ? '備貨去向門市' : '對應門市')
@@ -1934,7 +2096,7 @@ async function submitForm() {
   const holding = r['庫存狀態'] !== STOCK.SHIPPED
                 && r['庫存狀態'] !== STOCK.RESTORED
                 && r['庫存狀態'] !== STOCK.NA;
-  const rework = !!(plan && itemsChanged && holding);
+  const rework = !!(plan && itemsChanged && holding && t !== TYPES.PURCHASE);
   const delta = rework ? planDelta(oldPlan, plan) : { more: [], less: [] };
   const hasDelta = !!(delta.more.length || delta.less.length);
 

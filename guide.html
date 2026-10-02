@@ -227,10 +227,12 @@ body{margin:0}
   <div class="types">
     <div class="type"><span class="n">一</span><b>客戶預訂單</b><i>客人預訂商品、約好哪天來拿。按下「確認取貨完成」會自動扣庫存。</i></div>
     <div class="type"><span class="n">二</span><b>備貨</b><i>門市要補貨，從總倉（或另一間店）調貨過來。按「備貨完成」會把貨轉進該門市，<b>總數不變</b>。</i></div>
-    <div class="type"><span class="n">三</span><b>任務交接</b><i>任何要交接給下一班的事，空白自己打。</i></div>
-    <div class="type"><span class="n">四</span><b>例行工作</b><i>倒垃圾、盤點、清潔環境、擦玻璃這類提醒，勾選就好。</i></div>
+    <div class="type"><span class="n">三</span><b>進貨需求</b><i>公司沒這個貨、要跟廠商叫。<b>開單時不動庫存</b>，貨到了按確認完成才決定要不要入庫。</i></div>
+    <div class="type"><span class="n">四</span><b>報廢</b><i>貨壞了／過期／短少，直接從庫存扣掉，沒有營收。<b>總數真的會減少</b>。</i></div>
+    <div class="type"><span class="n">五</span><b>任務交接</b><i>任何要交接給下一班的事，空白自己打。</i></div>
+    <div class="type"><span class="n">六</span><b>例行工作</b><i>倒垃圾、盤點、清潔環境、擦玻璃這類提醒，勾選就好。</i></div>
   </div>
-  <p style="margin-top:20px;color:var(--ink-2);font-size:15px">每一則留言都要選<b>對應門市</b>。畫面上方可以切換「全部門市／三重龍門／西門」，只看自己這一間。</p>
+  <p style="margin-top:20px;color:var(--ink-2);font-size:15px">每一則留言都要選<b>對應門市</b>（只有<b>進貨需求</b>可以不選、或選「不指定」）。畫面上方可以切換「全部門市／三重龍門／西門」，只看自己這一間。</p>
 </section>
 
 <section>
@@ -289,6 +291,60 @@ body{margin:0}
   <div class="why">
     <b>和預訂單最大的不同</b>
     <p>備貨完成是<b>庫存轉移</b>，總數不會減少——貨只是從倉庫換到店裡，公司還是有這些貨。預訂單的「確認取貨完成」才是真的賣掉，總數才會減少。</p>
+  </div>
+</section>
+
+<section>
+  <h2>進貨需求：要跟廠商叫貨</h2>
+  <p class="lede">客人問的口味我們沒有、某一支快賣完想補叫、看到新品想叫來試試——只要是「希望公司去進這個貨」，就開這一張。</p>
+  <div class="why" style="margin-bottom:22px">
+    <b>這張單一毛庫存都不會動</b>
+    <p>它只是把需求寫下來讓採購看到。等貨真的到了，再按「確認完成」決定要不要入庫。</p>
+  </div>
+  <dl class="fields">
+    <div><dt>對應門市<span style="color:var(--ink-3);font-weight:400">（選填）</span></dt><dd>哪一間要的就選哪一間；全公司共用的需求選 <b>不指定</b>（選了不指定，三間門市的篩選都看得到）。</dd></div>
+    <div><dt>需求日期<span style="color:var(--ink-3);font-weight:400">（選填）</span></dt><dd>大概什麼時候要。待進貨區就是照這個排序。</dd></div>
+    <div><dt>客戶聯繫資訊<span style="color:var(--ink-3);font-weight:400">（選填）</span></dt><dd>有客人在等的話填這裡，貨到了才知道要通知誰。</dd></div>
+    <div><dt>進貨品項<span style="color:var(--ink-3);font-weight:400">（選填）</span></dt><dd>跟備貨一樣：點<b>分類分頁</b> → 選<b>產品名稱</b> → 填數量。但這裡<b>不用選來源、也不用填單價</b>（貨都還沒進來），填的數量超過現有庫存也<b>不會標紅</b>。</dd></div>
+    <div><dt>備註<span style="color:var(--ink-3);font-weight:400">（選填）</span></dt><dd><b>公司現在沒有、選單裡找不到的產品就寫在這裡</b>，例如「客人問有沒有 XX 牌新口味」。</dd></div>
+  </dl>
+  <div class="why" style="margin-top:22px">
+    <b>品項和備註至少要填一個</b>
+    <p>兩個都空的話送不出去。其他欄位全部可以留白——很多時候就是只寫一行備註而已。</p>
+  </div>
+  <div class="flow" style="margin-top:26px">
+    <div class="step hold">
+      <span class="dot">1</span>
+      <div>
+        <h4>送出 — 進「待進貨」區</h4>
+        <p class="when">依需求日期排序，庫存完全不動</p>
+      </div>
+    </div>
+    <div class="step out">
+      <span class="dot">2</span>
+      <div>
+        <h4>貨到了 — 按「✓ 確認完成」，選第 ① 個</h4>
+        <p class="when">「與實際進貨需求相同，請直接入庫」</p>
+        <div class="deltas">
+          <div><span class="lab">總倉</span><span class="val plus">＋ N</span><span style="color:var(--ink-3);font-size:14px">一律入總倉</span></div>
+          <div><span class="lab">總數</span><span class="val plus">＋ N</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="step">
+      <span class="dot">2</span>
+      <div>
+        <h4>進的貨跟單子不一樣 — 選第 ② 個</h4>
+        <p class="when">「與實際進貨不相同，請倉庫主管手動入庫」</p>
+        <div class="deltas">
+          <div><span class="lab">庫存</span><span class="val">完全不動</span><span style="color:var(--ink-3);font-size:14px">卡片會標紅字提醒去庫存表手改</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="why">
+    <b>要分到門市？入庫完再開一張備貨單</b>
+    <p>進貨<b>一律入總倉</b>。要送去三重或西門的話，入庫完再開一張備貨單調過去就好。另外，<b>沒填品項（只寫備註）的單，選項①會反灰按不下去</b>——沒有數量系統不知道要加什麼，這種單請倉庫主管自己在庫存表上加。</p>
   </div>
 </section>
 

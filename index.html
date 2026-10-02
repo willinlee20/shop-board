@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="4.1">
+<meta name="app-version" content="4.2">
 <title>西門龍門儀錶板</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -90,6 +90,7 @@ main{max-width:1040px;margin:0 auto;padding:16px 16px 80px}
 .tag-routine{background:var(--warn-soft);color:var(--warn)}
 .tag-stock{background:#e6f7f3;color:#0f766e}
 .tag-scrap{background:#fee2e2;color:#b91c1c}
+.tag-buy{background:#ede9fe;color:#6d28d9}
 .tag-store{background:#f1f5f9;color:var(--ink-2);font-weight:500}
 .tag-done{background:var(--ok-soft);color:var(--ok)}
 .tag-cancel{background:#f1f5f9;color:var(--ink-3)}
@@ -513,6 +514,12 @@ textarea{min-height:84px;resize:vertical}
 .tag-pick input{margin:0;width:15px;height:15px;accent-color:var(--brand)}
 .tag-pick.on{border-color:var(--brand);background:var(--brand-soft);color:var(--brand);font-weight:700}
 
+/* 選填欄位的小標示 */
+.opt-note{font-size:11.5px;font-weight:500;color:var(--ink-3);background:#f1f5f9;
+  border-radius:5px;padding:1px 7px;margin-left:6px;vertical-align:1px}
+/* 確認視窗裡不能選的選項 */
+#cmChips .chip.off{opacity:.45;cursor:not-allowed;text-decoration:line-through}
+
 /* 第五個標籤「銷售紀錄補登」會真的影響庫存，用顏色跟前四個分開 */
 .tag-pick.backfill{border-style:dashed}
 .tag-pick.backfill input{accent-color:#b45309}
@@ -700,7 +707,7 @@ textarea{min-height:84px;resize:vertical}
 <div id="toastHost"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="app.js?v=4.1"></script>
-<script src="sales.js?v=4.1"></script>
+<script src="app.js?v=4.2"></script>
+<script src="sales.js?v=4.2"></script>
 </body>
 </html>
