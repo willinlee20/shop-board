@@ -271,9 +271,27 @@ function unsettled(kind) {
 /** 作廢／已退貨的單不算應收 */
 const liveOrder = r => String(r['狀態']) !== SALES.VOID && String(r['狀態']) !== SALES.RETURNED;
 
+/* ---- 首頁那顆數字：只算「真的還要人處理」的單 -------------------------
+   以前是「所有還沒按收起的單」，所以結清了、作廢了但還沒收起的也會被算進去，
+   同事點進去看到空的或一堆灰卡，只會覺得「明明結清了還在叫」。          */
+function needsWork(kind, r) {
+  if (!liveOrder(r)) return false;                  // 已作廢／已退貨入庫 → 只是等收起
+  if (kind === 'online') return true;               // 網路單要走到會計確認才算結案
+  return String(r['結帳狀態']) !== '已結帳';         // 經銷／小賣：結清了就只等收起
+}
+/** 還要處理的張數（首頁紅色數字） */
+const openCount = k => unsettled(k).filter(r => needsWork(k, r)).length;
+/** 已經處理完、只差按收起的張數（首頁灰色小字） */
+const waitCount = k => unsettled(k).filter(r => !needsWork(k, r)).length;
+
 function renderSales() {
   if (SALE.view !== 'home') return;
-  const n = k => unsettled(k).length;
+  const n = k => openCount(k);
+  // 沒有待處理、但還有結清／作廢的單沒收起 → 用灰字提醒，不要用警示數字
+  const recvBtn = (k, ico, label) => `<button class="pos-btn" data-sv="recv-${k}"><span class="ico">${ico}</span>${label}
+        ${n(k) ? `<span class="badge">${n(k)}</span>`
+          : waitCount(k) ? `<span class="sub">${waitCount(k)} 張等收起</span>`
+            : '<span class="sub">目前沒有</span>'}</button>`;
   $('salesView').innerHTML = `
     <div class="pos-row">
       <button class="pos-btn primary" data-sv="new"><span class="ico">＋</span>新增銷售
@@ -288,12 +306,9 @@ function renderSales() {
         <span class="sub">核對庫存表的產品名稱</span></button>
     </div>
     <div class="pos-row">
-      <button class="pos-btn" data-sv="recv-dist"><span class="ico">🏪</span>經銷應收待結
-        ${n('dist') ? `<span class="badge">${n('dist')}</span>` : '<span class="sub">目前沒有</span>'}</button>
-      <button class="pos-btn" data-sv="recv-online"><span class="ico">📦</span>網路應收待結
-        ${n('online') ? `<span class="badge">${n('online')}</span>` : '<span class="sub">目前沒有</span>'}</button>
-      <button class="pos-btn" data-sv="recv-mini"><span class="ico">🛍️</span>小賣應收待結
-        ${n('mini') ? `<span class="badge">${n('mini')}</span>` : '<span class="sub">目前沒有</span>'}</button>
+      ${recvBtn('dist', '🏪', '經銷應收待結')}
+      ${recvBtn('online', '📦', '網路應收待結')}
+      ${recvBtn('mini', '🛍️', '小賣應收待結')}
     </div>
     <div class="sec-title">今日營業</div>
     ${todayPanel()}
@@ -456,17 +471,20 @@ function saleSrc() {
 function noStockTags() {
   const f = SALE.form;
   if (!f) return [];
-  // 來店單勾了「銷售紀錄補登」：貨老早就出去了，這張單只是補打紀錄，一毛庫存都不能動
-  if (f.kind === 'shop') return isBackfill() ? [BACKFILL_TAG] : [];
+  // 勾了「銷售紀錄補登」：貨老早就出去了，這張單只是補打紀錄，一毛庫存都不能動。
+  // 這個蓋過網路單的「庫存處理」選擇（來源也好、廠商代出也好，通通不生效）
+  if (isBackfill()) return [BACKFILL_TAG];
+  if (f.kind === 'shop') return [];
   if (f.kind !== 'online' || !f.noStock) return [];
   const hit = SALES.NOSTOCK.find(o => o.key === f.noStock);
   return hit ? [hit.tag] : [];
 }
 const skipStock = () => noStockTags().length > 0;
-/** 這張來店單是不是「補登」（備註標籤勾了銷售紀錄補登） */
+/** 這張單是不是「補登」（備註標籤勾了銷售紀錄補登）。來店、網路單都可以 */
+const CAN_BACKFILL = k => k === 'shop' || k === 'online';
 function isBackfill() {
   const f = SALE.form;
-  return !!(f && f.kind === 'shop' && hasBackfill(f.noteTags));
+  return !!(f && CAN_BACKFILL(f.kind) && hasBackfill(f.noteTags));
 }
 
 /** 小賣可選的取貨方式：勾了「小賣自取」就沒有寄送 */
@@ -507,21 +525,27 @@ function srcNote() {
 /** 網路單：庫存怎麼處理（三選一） */
 function noStockBlock() {
   const f = SALE.form;
+  // 備註勾了「銷售紀錄補登」的時候，這整塊就不生效了——選項留著讓同事看得到原本選什麼，
+  // 但一律反灰按不動，免得誤以為庫存有扣。取消勾選就自動解鎖。
+  const back = isBackfill();
   // 一個單選群組同時管兩件事：從哪裡扣（src:欄位），或是根本不扣（agent／order）
   const cur = f.noStock ? f.noStock : 'src:' + (f.onSrc || CONFIG.H.warehouse);
   const opt = (key, html) => `<label class="opt${cur === key ? ' on' : ''}">
-      <input type="radio" name="nsMode" value="${sEsc(key)}"${cur === key ? ' checked' : ''}>
+      <input type="radio" name="nsMode" value="${sEsc(key)}"${cur === key ? ' checked' : ''}${back ? ' disabled' : ''}>
       <span>${html}</span></label>`;
   return `<div class="field">
-    <label>庫存處理 <span class="req">*</span></label>
-    <div class="opt-list">
+    <label>庫存處理 ${back ? '' : '<span class="req">*</span>'}</label>
+    <div class="opt-list${back ? ' locked' : ''}" id="nsList">
       ${srcOptions().map(o => opt('src:' + o.col,
         `庫存扣在 <b>${sEsc(o.label)}</b>${o.col === CONFIG.H.warehouse ? '（一般情況）' : ''}`)).join('')}
       ${SALES.NOSTOCK.map(o => opt(o.key, sEsc(o.label))).join('')}
     </div>
-    ${skipStock()
-      ? `<div class="opt-warn">🚫 這張單<b>不扣庫存</b>（${sEsc(noStockTags().join('、'))}），只記錄銷售、營收與成本</div>`
-      : `<div class="hint-row">貨從 <b>${sEsc(srcLabel(saleSrc()))}</b> 出，送出後就從那裡扣掉；上面品項的庫存數字也是看這裡</div>`}
+    ${back
+      ? `<div class="hint-row backfill">📝 <b>紀錄補登，不扣庫存</b>　備註勾了「銷售紀錄補登」，
+           上面選的來源<b>不會生效</b>，這張單只補業績和金額。取消勾選就恢復正常。</div>`
+      : skipStock()
+        ? `<div class="opt-warn">🚫 這張單<b>不扣庫存</b>（${sEsc(noStockTags().join('、'))}），只記錄銷售、營收與成本</div>`
+        : `<div class="hint-row">貨從 <b>${sEsc(srcLabel(saleSrc()))}</b> 出，送出後就從那裡扣掉；上面品項的庫存數字也是看這裡</div>`}
   </div>`;
 }
 
@@ -533,7 +557,7 @@ function renderSaleBody() {
   const dateField = `<div class="field"><label>訂單日期 <span class="req">*</span></label>
       <input type="date" id="fDate2" value="${f.date}"></div>`;
   const noteField = `<div class="field"><label>備註</label>
-      ${noteTagsField('noteTags', f.noteTags, f.kind === 'shop' ? NOTE_TAGS : BASIC_TAGS)}
+      ${noteTagsField('noteTags', f.noteTags, CAN_BACKFILL(f.kind) ? NOTE_TAGS : BASIC_TAGS)}
       <textarea id="fNote2" placeholder="特殊狀況、客人交代的事">${sEsc(f.note)}</textarea></div>`;
   const payFields = `
     <div class="field"><label>結帳狀態 <span class="req">*</span></label>
@@ -699,7 +723,7 @@ function wireSaleBody() {
   wireNoteTags('noteTags', () => f.noteTags, t => {
     const was = isBackfill();
     f.noteTags = t;
-    if (f.kind === 'shop' && was !== isBackfill()) renderSaleBody();   // 提示文字要換
+    if (was !== isBackfill()) renderSaleBody();   // 提示文字、庫存處理的鎖都要跟著換
   });
   on('fCName', 'oninput', e => f.cName = e.target.value);
   on('fPayDate', 'oninput', e => f.payDate = e.target.value);
@@ -758,7 +782,8 @@ function wireSaleBody() {
 function renderSpecGroups() {
   const host = $('specGroups'), P = S.products, f = SALE.form;
   const src = saleSrc(), srcName = srcLabel(src);
-  const gifts = f.kind === 'online';          // 只有網路單要標品項性質
+  // v4.3：來店單也用同一套品項性質（保固換貨／點數換贈／公關贈品）
+  const gifts = f.kind === 'online' || f.kind === 'shop';
   host.innerHTML = f.groups.map((g, i) => {
     const cat = g.cat || S.lastCat || (P.cats[0] || ALL_CAT);
     const names = (!P.hasCats || cat === ALL_CAT) ? P.names : (P.byCat.get(cat) || []);
@@ -903,7 +928,7 @@ async function submitSale() {
         ? `<div class="alert-box">📝 <b>銷售紀錄補登</b>——這張單<b>完全不扣庫存</b><br>
              <span style="font-weight:400;font-size:13px">貨早就出去了，這只是把漏打的單補起來。
              業績、金額、成本照記，庫存數字一個都不會動。</span></div>
-           <p style="font-size:15px">補登日期：<b>${sEsc(f.date)}</b>　門市：<b>${sEsc(f.store)}</b></p>
+           <p style="font-size:15px">補登日期：<b>${sEsc(f.date)}</b>${k === 'shop' ? `　門市：<b>${sEsc(f.store)}</b>` : ''}</p>
            <p style="font-size:14px;color:var(--ink-2)">這張單的內容：</p>`
         : noStock
           ? `<div class="alert-box">🚫 這張單<b>不扣庫存</b>（${sEsc(tags.join('、'))}）<br>
@@ -1405,7 +1430,9 @@ async function submitShopEdit() {
     ? '<p style="font-size:14px;color:var(--ink-2)">這張單來自預訂單，<b>不會動到庫存</b>。</p>'
     : `<p style="font-size:14px;color:var(--ink-2)">庫存<b>只會動有變的部分</b>，沒改到的品項完全不會被碰到：</p>
        <pre class="pre">${esc(saleDeltaText(delta))}</pre>
-       ${noStock ? `<div class="alert-box">🚫 這張單現在是<b>不扣庫存</b>（${sEsc(noStockTags().join('、'))}）${oldPlan.length ? '，原本扣掉的會退回來' : ''}。</div>` : ''}`;
+       ${isBackfill()
+         ? `<div class="alert-box">📝 這張單現在是<b>銷售紀錄補登</b>，<b>完全不扣庫存</b>${oldPlan.length ? '，原本扣掉的會退回來' : ''}。業績、金額、成本照記。</div>`
+         : noStock ? `<div class="alert-box">🚫 這張單現在是<b>不扣庫存</b>（${sEsc(noStockTags().join('、'))}）${oldPlan.length ? '，原本扣掉的會退回來' : ''}。</div>` : ''}`;
 
   const ok = await confirmModal({
     title: '確認儲存這些修改？',
@@ -1600,15 +1627,17 @@ function renderRecv(kind) {
           <span class="sub2">${g.n} 張未結　·　最早 ${sEsc(g.oldest || '—')}${g.ship ? `　·　${g.ship} 張未寄出` : ''}<i class="go">點開處理 ›</i></span>
         </button>`).join('')}`
       : `<div class="empty">目前沒有未結的${name}訂單 🎉</div>`) +
-    (done.length ? `<div class="sec-title">已結帳、等收起（${done.length}）</div>
+    (done.length ? `<div class="sec-title">已結帳、等收起（${done.length}）
+        <button class="btn btn-sm btn-ok bulk" data-bulk="done">✓ 全部收起</button></div>
       ${done.map(r => `<button class="sum-card" data-who="${sEsc(recvWho(r, kind))}">
           <span class="who3">${sEsc(recvWho(r, kind))}</span>
           <span class="owe" style="color:var(--ok)">${money(owedOf(r))}</span>
           <span class="sub2">${sEsc(r['訂單日期'])}　·　${sEsc(r['取貨狀態'] || '')}<i class="go">點開處理 ›</i></span>
         </button>`).join('')}` : '') +
-    (dead.length ? `<div class="sec-title">已作廢／已退貨入庫，等收起（${dead.length}）</div>
+    (dead.length ? `<div class="sec-title">已作廢／已退貨入庫，等收起（${dead.length}）
+        <button class="btn btn-sm btn-ok bulk" data-bulk="dead">✓ 全部收起</button></div>
       <div class="hint-row" style="margin:-4px 0 10px 2px">這幾張已經處理完了，庫存當初就退回去了。
-        按進去按「✓ 收起」就會從清單和上面的數字消失。</div>
+        按上面的「全部收起」一次清掉，或點進去一張一張收。</div>
       ${dead.map(r => `<button class="sum-card is-dead" data-who="${sEsc(recvWho(r, kind))}">
           <span class="who3">${sEsc(recvWho(r, kind))}</span>
           <span class="owe" style="color:var(--ink-3)">${money(owedOf(r))}</span>
@@ -1617,6 +1646,44 @@ function renderRecv(kind) {
 
   document.querySelectorAll('#salesView .sum-card').forEach(b =>
     b.onclick = () => renderRecvOne(kind, b.dataset.who));
+  document.querySelectorAll('#salesView [data-bulk]').forEach(b =>
+    b.onclick = () => archiveMany(kind, b.dataset.bulk === 'dead' ? dead : done,
+      { gone: b.dataset.bulk === 'dead' }));
+}
+
+/* ---- 一次收起好幾張 ---------------------------------------------------
+   結清了、或作廢退貨完的單，以前要一張一張點進去按「收起」，
+   十幾張就很煩，而且沒收乾淨首頁的提醒就一直掛著。             */
+async function archiveMany(kind, rows, opt) {
+  if (!rows || !rows.length) return;
+  const gone = !!(opt && opt.gone);
+  const ok = await confirmModal({
+    title: `把這 ${rows.length} 張單一次收起？`,
+    lines: `<p style="font-size:15px">${gone
+        ? '這幾張都是<b>已作廢／已退貨入庫</b>的單，庫存當初就處理完了，收起<b>不會再動庫存</b>。'
+        : '這幾張都已經<b>結帳完成</b>了，收起只是把它們從待辦清單移走。'}</p>
+      <pre class="pre">${esc(rows.map(r =>
+        `・${recvWho(r, kind)}　${r['訂單日期']}　${money(owedOf(r))}${gone ? '　' + (r['狀態'] || '') : ''}`).join('\n'))}</pre>
+      <div class="alert-box">收起後這些單<b>不會再出現在應收待結和今日銷售</b>，首頁的提醒數字也會跟著歸零。
+        試算表的資料完整保留，「查詢」永遠查得到。</div>`,
+    okText: `確定，收起這 ${rows.length} 張`
+  });
+  if (!ok) return;
+  const t = SALE.titles[kind], data = [], who = userName() + ' ' + nowStr();
+  const patches = rows.map(r => gone
+    ? { 封存: '是' }
+    : { 封存: '是', 結帳確認者: r['結帳確認者'] || who });
+  rows.forEach((r, i) => Object.keys(patches[i]).forEach(key => {
+    const ci = SH_COL[kind][key];
+    if (ci === undefined) return;
+    data.push({ range: `'${t}'!${colLetter(ci)}${r._row}`, values: [[patches[i][key]]] });
+  }));
+  try {
+    await writeRanges(data);
+    rows.forEach((r, i) => Object.assign(r, patches[i]));   // 寫成功了才同步本機
+    await loadSales(); reRenderRecv(kind);
+    toast(`已收起 ${rows.length} 張`, 'ok');
+  } catch (err) { alert('失敗：\n' + err.message); }
 }
 
 /* ---- 網路單的階段狀態 ----------------------------------------------
@@ -1663,6 +1730,8 @@ function renderPickList(kind, name) {
   // 會計要的小計：已經跑完全部貨態、等確認結案的那幾張，金額加總
   const accRows = all.filter(stageOf('acc').hit);
   const accSum = sumOf(accRows);
+  // 作廢／退貨入庫、只差按收起的單——留著只會讓首頁一直掛著數字
+  const deadRows = all.filter(r => !liveOrder(r));
 
   const chips = `<div class="stage-bar">
       <button class="stg${st ? '' : ' on'}" data-stage="">全部<i>${all.length}</i></button>
@@ -1685,6 +1754,11 @@ function renderPickList(kind, name) {
         <span class="n">${accRows.length} 張</span>
         <span class="amt">${money(accSum)}</span>
       </div>` : ''}
+      ${deadRows.length ? `<div class="dead-sum">
+        <span class="lb">已作廢／已退貨入庫<i>庫存當初就處理完了，只差收起</i></span>
+        <span class="n">${deadRows.length} 張</span>
+        <button class="btn btn-sm btn-ok" data-bulkdead="1">✓ 全部收起</button>
+      </div>` : ''}
       ${chips}
       ${rows.length
         ? `${st ? `<div class="stage-note">目前只看「${sEsc(st.label)}${sEsc(st.sub ? '：' + st.sub : '')}」，
@@ -1697,6 +1771,8 @@ function renderPickList(kind, name) {
     SALE.pickStage = b.dataset.stage || null;
     renderPickList(kind, name);
   });
+  const bd = document.querySelector('#salesView [data-bulkdead]');
+  if (bd) bd.onclick = () => archiveMany(kind, deadRows, { gone: true });
   wireRecv(kind);
 }
 
@@ -1741,7 +1817,9 @@ function pickCard(r, kind) {
 
     <div class="pick-items">${sEsc(r['訂單內容'] || '（無品項）')}</div>
     ${discLine(r, '價格')}
-    ${noStock ? `<div class="pick-flag">🚫 ${sEsc(r['庫存狀態'])}　貨還沒進來，不要撿貨</div>` : ''}
+    ${rowBackfill(r)
+      ? `<div class="pick-flag back">📝 <b>銷售紀錄補登</b>　這張單<b>沒有扣庫存</b>，貨早就出去了，不用撿貨</div>`
+      : noStock ? `<div class="pick-flag">🚫 ${sEsc(r['庫存狀態'])}　貨還沒進來，不要撿貨</div>` : ''}
     ${r['備註'] ? `<div class="pick-note">備註：${sEsc(r['備註'])}</div>` : ''}
 
     <div class="pick-row">

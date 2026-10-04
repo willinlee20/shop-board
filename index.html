@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="4.2">
+<meta name="app-version" content="4.3">
 <title>西門龍門儀錶板</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -447,6 +447,9 @@ textarea{min-height:84px;resize:vertical}
   justify-self:center;align-self:start;margin-top:1px;
 }
 .opt-list .opt span{min-width:0;overflow-wrap:anywhere}
+/* 勾了「銷售紀錄補登」→ 庫存處理整塊反灰，選項看得到但按不動 */
+.opt-list.locked{opacity:.5;pointer-events:none}
+.opt-list.locked .opt.on{border-color:var(--line);background:#f8fafc;color:var(--ink-2)}
 .opt-warn{
   margin-top:10px;background:var(--warn-soft);border:1px solid #fcd34d;
   border-left:4px solid var(--warn);color:#92400e;
@@ -502,6 +505,12 @@ textarea{min-height:84px;resize:vertical}
 .acct-sum .lb i{display:block;font-style:normal;font-weight:400;font-size:11px;color:#059669}
 .acct-sum .n{margin-left:auto;font-size:12.5px;color:#047857}
 .acct-sum .amt{font-size:17px;font-weight:800;color:#047857;font-variant-numeric:tabular-nums}
+.dead-sum{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;
+  padding:10px 14px;border-radius:11px;background:#f8fafc;border:1px solid var(--line)}
+.dead-sum .lb{font-size:13px;font-weight:700;color:var(--ink-2);line-height:1.3}
+.dead-sum .lb i{display:block;font-style:normal;font-weight:400;font-size:11px;color:var(--ink-3)}
+.dead-sum .n{margin-left:auto;font-size:12.5px;color:var(--ink-2)}
+.sec-title .bulk{float:right;margin-top:-5px;letter-spacing:0;font-weight:700}
 .stage-bar .stg b.sm{flex:1 1 100%;font-size:11.5px;font-weight:700;color:var(--ink-2);
   font-variant-numeric:tabular-nums}
 .stage-bar .stg.on b.sm{color:var(--brand)}
@@ -550,6 +559,7 @@ textarea{min-height:84px;resize:vertical}
   font-size:15.5px;font-weight:500;line-height:1.65;overflow-wrap:anywhere}
 .pick-flag{background:var(--bad-soft);border:1px solid #fecaca;color:#991b1b;border-radius:8px;
   padding:7px 11px;font-size:13px;font-weight:500;margin-bottom:9px}
+.pick-flag.back{background:var(--warn-soft);border-color:#fcd34d;color:#b45309}
 .pick-note{font-size:12.5px;color:var(--ink-2);margin-bottom:9px;overflow-wrap:anywhere}
 .pick-row{display:grid;grid-template-columns:58px 1fr;align-items:center;gap:8px;margin-bottom:7px}
 .pick-row .pl{font-size:12px;color:var(--ink-3);white-space:nowrap}
@@ -707,7 +717,7 @@ textarea{min-height:84px;resize:vertical}
 <div id="toastHost"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="app.js?v=4.2"></script>
-<script src="sales.js?v=4.2"></script>
+<script src="app.js?v=4.3"></script>
+<script src="sales.js?v=4.3"></script>
 </body>
 </html>
