@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="4.4">
+<meta name="app-version" content="4.6">
 <title>西門龍門儀錶板</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -515,6 +515,57 @@ textarea{min-height:84px;resize:vertical}
   font-variant-numeric:tabular-nums}
 .stage-bar .stg.on b.sm{color:var(--brand)}
 
+/* ---------- 業績報表 ---------- */
+.pf-months{display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:12px;
+  -webkit-overflow-scrolling:touch;scrollbar-width:none}
+.pf-months::-webkit-scrollbar{display:none}
+.pf-m{flex:0 0 auto;border:1.5px solid var(--line);background:var(--card);color:var(--ink-2);
+  border-radius:999px;padding:7px 14px;font-size:13.5px;font-weight:700;cursor:pointer;
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+.pf-m.on{border-color:var(--brand);background:var(--brand);color:#fff}
+
+.pf-sum{background:var(--card);border:1px solid var(--line);border-radius:14px;
+  padding:16px 16px 14px;margin-bottom:18px}
+.pf-big{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.pf-big .lb{font-size:12.5px;color:var(--ink-3);font-weight:700}
+.pf-big b{font-size:28px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums;line-height:1.1}
+.pf-delta{font-size:13px;font-weight:700;border-radius:999px;padding:2px 9px}
+.pf-delta.up{background:var(--ok-soft);color:var(--ok)}
+.pf-delta.down{background:var(--bad-soft);color:var(--bad)}
+/* 手機上三欄會把「NT$501,937」折成兩行，所以改成塞不下就自動變兩欄 */
+.pf-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:10px 12px;
+  border-top:1px solid var(--line);padding-top:12px}
+.pf-grid>div{min-width:0}
+.pf-grid .lb{display:block;font-size:11.5px;color:var(--ink-3);font-weight:700;margin-bottom:3px}
+.pf-grid b{display:block;font-size:16.5px;font-weight:800;color:var(--ink);
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+.pf-grid i{display:block;font-style:normal;font-size:11.5px;color:var(--ink-3);margin-top:1px}
+.pf-prev{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line);
+  font-size:12.5px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+
+.pf-table{width:100%;border-collapse:collapse;background:var(--card);
+  border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:6px}
+.pf-table th{font-size:11.5px;font-weight:700;color:var(--ink-3);text-align:left;
+  padding:9px 10px;background:#f8fafc;border-bottom:1px solid var(--line);white-space:nowrap}
+.pf-table td{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}
+.pf-table tr:last-child td{border-bottom:0}
+.pf-table .pf-n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;
+  font-size:14.5px;font-weight:700;color:var(--ink)}
+.pf-table th.pf-n{font-size:11.5px;font-weight:700;color:var(--ink-3)}
+.pf-sub{display:block;font-style:normal;font-size:11.5px;font-weight:500;color:var(--ink-3);margin-top:1px}
+.pf-table td.pf-n.neg{color:var(--bad)}
+.pf-grid b.neg{color:var(--bad)}
+.pf-who{min-width:92px}
+.pf-who .nm{display:block;font-size:14.5px;font-weight:700;color:var(--ink);overflow-wrap:anywhere}
+.pf-warn{font-style:normal;color:var(--warn);margin-left:3px}
+.pf-bar{display:block;height:4px;border-radius:999px;background:var(--line);margin-top:6px;overflow:hidden}
+.pf-bar i{display:block;height:100%;background:var(--brand);border-radius:999px}
+
+.pf-note{margin-top:18px;background:#f8fafc;border:1px solid var(--line);
+  border-radius:12px;padding:12px 14px}
+.pf-note b{font-size:13px;color:var(--ink-2)}
+.pf-note p{margin:5px 0 0;font-size:12.5px;line-height:1.75;color:var(--ink-3)}
+
 /* ---------- 備註小標籤 ---------- */
 .tag-picks{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:8px}
 .tag-pick{display:inline-flex;align-items:center;gap:5px;border:1.5px solid var(--line);
@@ -721,7 +772,7 @@ textarea{min-height:84px;resize:vertical}
 <div id="toastHost"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="app.js?v=4.4"></script>
-<script src="sales.js?v=4.4"></script>
+<script src="app.js?v=4.6"></script>
+<script src="sales.js?v=4.6"></script>
 </body>
 </html>

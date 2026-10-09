@@ -17,6 +17,8 @@ const SALES = {
   // 名單分頁：先用分頁名稱找，找不到再用「標題列有什麼欄位」認（改名也不會壞）
   LIST_SHEET: { staff: ['Sales業務同仁list', 'Sales業務同仁名單'], mini: '', dist: '' },
   LIST_SIG: { staff: '負責業務', mini: '小賣名稱', dist: '經銷商名稱' },
+  /** 業務名單 C 欄的標題：填「是」的人才看得到業績報表 */
+  ADMIN_COL: '幹部',
 
   // 網路單：前台只選收款方式，系統自己推結帳狀態
   COLLECT: ['已收貨款', '貨到付款'],
@@ -144,6 +146,12 @@ window.initSales = async function (sheets) {
       || titles.find(t => (heads[t] || []).some(c => String(c).trim() === sig));
     if (!hit) continue;
     SALE.titles['list_' + key] = hit;
+    // 業務名單的 C 欄是「幹部」旗標（業績報表看得到誰）。沒有標題就幫忙補一個，
+    // 不然同事打開試算表會不知道那一欄要填什麼。原本有東西就不動。
+    if (key === 'staff' && !String((heads[hit] || [])[2] || '').trim()) {
+      try { await writeRanges([{ range: `'${hit}'!C1`, values: [[SALES.ADMIN_COL]] }]); }
+      catch (e) { console.warn('補「幹部」欄標題失敗', e); }
+    }
     const rows = await readRange(hit, 'A2:F400');
     SALE.lists[key] = rows.filter(r => String(r[0] || '').trim()).map(r => ({
       name: String(r[0]).trim(), contact: String(r[1] || '').trim(),
@@ -327,6 +335,10 @@ function renderSales() {
       <button class="pos-btn" data-sv="health"><span class="ico">🩺</span>資料庫品項健檢
         <span class="sub">核對庫存表的產品名稱</span></button>
     </div>
+    ${canSeePerf() ? `<div class="pos-row">
+      <button class="pos-btn" data-sv="perf"><span class="ico">📊</span>業績報表
+        <span class="sub">每月各業務的業績 · 毛利 · 客單</span></button>
+    </div>` : ''}
     <div class="pos-row">
       ${recvBtn('dist', '🏪', '經銷應收待結')}
       ${recvBtn('online', '📦', '網路應收待結')}
@@ -409,6 +421,7 @@ document.addEventListener('click', e => {
   if (v === 'query') return renderQuery();
   if (v === 'shoplog') return renderShopLog();
   if (v === 'health') return renderHealth();
+  if (v === 'perf') return canSeePerf() ? renderPerf() : renderSales();
   if (v.startsWith('recv-')) return renderRecv(v.slice(5));
 });
 
@@ -2180,6 +2193,166 @@ async function patchSale(kind, r, patch) {
   }
   await writeRanges(data);
   Object.assign(r, patch);      // 本機同步，重新讀取失敗也不會顯示舊狀態
+}
+
+/* ============================ 業績報表 =================================
+   來店單（ShopSales店頭銷售）按月算每個業務的業績、毛利、客單數。
+
+   算法故意寫得很直白，出納要自己核對也查得出來：
+     業績   = 這個月這個業務所有「有效」來店單的 金額 加總（金額本來就是折扣後的）
+     毛利   = 業績 − 成本加總
+     客單數 = 張數（一張單算一個客人）
+     客單價 = 業績 ÷ 客單數
+
+   會排除的：**只有已作廢的單**。
+   收起（封存）過的單照算——收起只是不想在紀錄頁看到它，錢還是收了。
+   補登單、預訂單帶過來的單也都照算，那些都是真的營收。            ========= */
+
+/* ---- 誰看得到業績報表 -------------------------------------------------
+   名單放在「Sales業務同仁list」的 **C 欄（幹部）**，填「是」的人才看得到。
+
+   為什麼放試算表、不寫死在程式裡：這個 repo 是**公開**的（免費 GitHub Pages
+   只支援公開 repo），不想把同仁的 email 放進公開的程式碼；而且要加人減人
+   直接改試算表就好，不用等我改程式。
+
+   ⚠ **這是「擋住隨手點開」，不是真正的權限控管。**
+   打得開試算表的人，直接看 ShopSales店頭銷售 就有每一筆的金額和成本，
+   自己也算得出來。真正的門鎖是**試算表的共用名單**。            ---- */
+const ADMIN_YES = ['是', 'Y', 'YES', 'TRUE', '✓', 'V', '1', 'O'];
+const isAdminFlag = v => ADMIN_YES.includes(String(v || '').trim().toUpperCase());
+/** 這個登入帳號看得到業績報表嗎。查不到人、沒勾的一律看不到（寧可擋錯也不要漏看） */
+function canSeePerf() {
+  const mail = String((S.user && S.user.email) || '').trim().toLowerCase();
+  if (!mail) return false;
+  return (SALE.lists.staff || []).some(x =>
+    isAdminFlag(x.c) && String(x.contact || '').trim().toLowerCase() === mail);
+}
+
+/** 這幾個不是人，是記帳用的分類。排在業務排行榜下面，不混在一起比 */
+const NON_STAFF = ['公關品', '員購', '新客來店'];
+const isNonStaff = n => NON_STAFF.includes(String(n || '').trim());
+
+/** 這張單算不算業績 */
+const perfLive = r => String(r['狀態']) !== SALES.VOID;
+/** 訂單日期的前七碼就是月份（資料都是 2026-09-18 這種格式） */
+const monthOf = r => String(r['訂單日期'] || '').slice(0, 7);
+
+/** 把來店單整理成 { 月份 → { 業務 → {rev, cost, n} } } */
+function perfData() {
+  const out = new Map();
+  (SALE.rows.shop || []).filter(perfLive).forEach(r => {
+    const m = monthOf(r);
+    if (!/^\d{4}-\d{2}$/.test(m)) return;            // 日期沒填或格式怪的先跳過
+    const who = String(r['負責業務'] || '').trim() || '（未填）';
+    if (!out.has(m)) out.set(m, new Map());
+    const bag = out.get(m);
+    const e = bag.get(who) || { who, rev: 0, cost: 0, n: 0 };
+    e.rev += Number(r['金額']) || 0;
+    e.cost += Number(r['成本']) || 0;
+    e.n += 1;
+    bag.set(who, e);
+  });
+  return out;
+}
+const perfMonths = data => [...data.keys()].sort().reverse();
+/** 名單上沒有的名字要標出來——通常是 Google 顯示名稱跑進來了（v4.4 以前的舊單） */
+const knownStaff = n => (SALE.lists.staff || []).some(x => String(x.name || '').trim() === n);
+const pct = (a, b) => (b ? Math.round(a / b * 1000) / 10 : 0);
+/** 負數要寫成「−NT$300」，不是「NT$-300」——公關品的毛利本來就是負的，常常看到 */
+const pfMoney = n => (Number(n) < 0 ? '−' + money(Math.abs(n)) : money(n));
+const sumRows = list => list.reduce((a, e) =>
+  ({ rev: a.rev + e.rev, cost: a.cost + e.cost, n: a.n + e.n }), { rev: 0, cost: 0, n: 0 });
+/** 跟上個月比：回傳 +12.3 / −5.0 這種字串，沒有上個月就回空 */
+function perfDelta(cur, prev) {
+  if (!prev || !prev.rev) return '';
+  const d = pct(cur.rev - prev.rev, prev.rev);
+  return `<span class="pf-delta ${d >= 0 ? 'up' : 'down'}">${d >= 0 ? '▲' : '▼'} ${Math.abs(d)}%</span>`;
+}
+
+function perfRow(e, best) {
+  const gp = e.rev - e.cost;
+  const bar = best ? Math.max(2, Math.round(e.rev / best * 100)) : 0;
+  return `<tr>
+    <td class="pf-who">
+      <span class="nm">${sEsc(e.who)}${knownStaff(e.who) || isNonStaff(e.who) ? ''
+        : '<i class="pf-warn" title="這個名字不在 Sales業務同仁list 上">⚠</i>'}</span>
+      <span class="pf-bar"><i style="width:${bar}%"></i></span>
+    </td>
+    <td class="pf-n">${money(e.rev)}</td>
+    <td class="pf-n${gp < 0 ? ' neg' : ''}">${pfMoney(gp)}<i class="pf-sub">${pct(gp, e.rev)}%</i></td>
+    <td class="pf-n">${e.n}<i class="pf-sub">${money(Math.round(e.rev / (e.n || 1)))}</i></td>
+  </tr>`;
+}
+
+function perfTable(list, best) {
+  if (!list.length) return '';
+  return `<table class="pf-table">
+    <thead><tr><th>業務</th><th class="pf-n">業績</th><th class="pf-n">毛利 / 率</th><th class="pf-n">客單數 / 價</th></tr></thead>
+    <tbody>${list.map(e => perfRow(e, best)).join('')}</tbody>
+  </table>`;
+}
+
+function renderPerf() {
+  // 按鈕本來就只給幹部看，這裡再擋一次——免得有人從別的路徑跑進來
+  if (!canSeePerf()) { SALE.view = 'home'; return renderSales(); }
+  SALE.view = 'perf';
+  const data = perfData(), months = perfMonths(data);
+  if (!months.length) {
+    $('salesView').innerHTML = backBar('業績報表') + `<div class="empty">還沒有來店銷售資料</div>`;
+    return;
+  }
+  if (!SALE.perfMonth || !data.has(SALE.perfMonth)) SALE.perfMonth = months[0];
+  const m = SALE.perfMonth;
+  const all = [...data.get(m).values()];
+  const staff = all.filter(e => !isNonStaff(e.who)).sort((a, b) => b.rev - a.rev);
+  const other = all.filter(e => isNonStaff(e.who)).sort((a, b) => b.rev - a.rev);
+  const tot = sumRows(staff);
+  const best = staff.length ? staff[0].rev : 0;
+
+  // 上個月（照月份排序找前一個，不是硬算日曆，資料斷月也不會錯）
+  const i = months.indexOf(m), prevM = months[i + 1] || null;
+  const prev = prevM ? sumRows([...data.get(prevM).values()].filter(e => !isNonStaff(e.who))) : null;
+  const gp = tot.rev - tot.cost;
+
+  $('salesView').innerHTML = backBar('業績報表') + `
+    <div class="pf-months">${months.slice(0, 18).map(x =>
+      `<button class="pf-m${x === m ? ' on' : ''}" data-pm="${sEsc(x)}">${sEsc(x.replace('-', ' / '))}</button>`).join('')}</div>
+
+    <div class="pf-sum">
+      <div class="pf-big"><span class="lb">業績</span><b>${money(tot.rev)}</b>${perfDelta(tot, prev)}</div>
+      <div class="pf-grid">
+        <div><span class="lb">毛利</span><b${gp < 0 ? ' class="neg"' : ''}>${pfMoney(gp)}</b><i>${pct(gp, tot.rev)}%</i></div>
+        <div><span class="lb">客單數</span><b>${tot.n}</b><i>${staff.length} 位業務</i></div>
+        <div><span class="lb">客單價</span><b>${money(Math.round(tot.rev / (tot.n || 1)))}</b></div>
+      </div>
+      ${prevM ? `<div class="pf-prev">上個月（${sEsc(prevM)}）業績 ${money(prev.rev)}　·　毛利 ${pfMoney(prev.rev - prev.cost)}　·　${prev.n} 單</div>` : ''}
+    </div>
+
+    <div class="sec-title">業務排行（依業績）</div>
+    ${perfTable(staff, best)}
+
+    ${other.length ? `<div class="sec-title">非業務（記帳分類，不列入排行）</div>
+      ${perfTable(other, best)}
+      <div class="hint-row" style="margin-top:-2px">公關品、員購這類單有成本沒有相對的營收，<b>毛利會是負的</b>，那是正常的。</div>` : ''}
+
+    ${staff.some(e => !knownStaff(e.who)) ? `<div class="warn-box" style="margin-top:14px">
+      ⚠ 有 <b>${staff.filter(e => !knownStaff(e.who)).map(e => sEsc(e.who)).join('、')}</b>
+      不在「Sales業務同仁list」上。<br>
+      <span style="font-weight:400;font-size:13px">多半是 v4.4 以前把 Google 帳號的顯示名稱寫進去了（例如 Mini Hsu 其實是小美），
+      這些業績沒有算到本人頭上。請到試算表把負責業務改成名單上的名字，或是把這個人加進名單。</span></div>` : ''}
+
+    <div class="pf-note">
+      <b>怎麼算的</b>
+      <p>只算<b>來店銷售單</b>（ShopSales店頭銷售），依<b>訂單日期</b>歸月份。
+      業績＝金額加總（已經扣掉折扣）；毛利＝業績 − 成本；客單數＝單數；客單價＝業績 ÷ 單數。<br>
+      <b>已作廢的單不算</b>。收起（封存）過的單<b>照算</b>——收起只是不想在紀錄頁看到，錢還是收了。
+      補登單、預訂單帶過來的單也都照算。</p>
+    </div>`;
+
+  document.querySelectorAll('#salesView .pf-m').forEach(b => b.onclick = () => {
+    SALE.perfMonth = b.dataset.pm;
+    renderPerf();
+  });
 }
 
 /* ----------------------------- 查詢 ------------------------------------ */
