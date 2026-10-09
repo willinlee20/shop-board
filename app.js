@@ -5,8 +5,8 @@
    ========================================================================= */
 
 /* ----------------------------- 版本 ------------------------------------ */
-const APP_VERSION = '4.3';          // 每次改版都會更新，畫面右上角看得到
-const APP_DATE = '2026-10-04';
+const APP_VERSION = '4.4';          // 每次改版都會更新，畫面右上角看得到
+const APP_DATE = '2026-10-09';
 
 /* ----------------------------- 設定區 -----------------------------------
    要改的東西都在這裡，下面的程式不用動。
@@ -69,10 +69,11 @@ const BOARD_HEADERS = [
   '品項明細', '金額', '備註', '例行工作項目',
   '完成時間', '完成者', '品項JSON', '庫存異動JSON', '庫存狀態',
   '最後修改時間', '最後修改者', '修改紀錄', '關聯單號',
-  '折扣', '未折金額', '收款方式'
+  '折扣', '未折金額', '收款方式', '建立者Email'
 ];
 const C = {}; BOARD_HEADERS.forEach((h, i) => C[h] = i);   // 欄位 → 索引
-const BOARD_LAST_COL = 'Z';
+// 從欄位數算出來，新增欄位時不會忘了改（寫死的話多一欄就整列讀不到）
+const BOARD_LAST_COL = (i => { let s = ''; i++; while (i > 0) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = (i - m - 1) / 26; } return s; })(BOARD_HEADERS.length - 1);
 /** 預訂單的收款方式（跟銷售模組的 SALES.PAYWAY 一致，出納對帳用） */
 const PAY_WAYS = ['現金', '匯款'];
 
@@ -1021,27 +1022,42 @@ document.addEventListener('click', async e => {
 
   if (act === 'ship') {
     const plan = parseJSON(r['庫存異動JSON'], []);
-    const ok = await confirmModal({
+    /* 業務是誰：照 email 去查業務同仁名單。查得到就直接用，
+       查不到（舊單沒記 email、或名單裡沒這個人）就跳一排名字讓人選——
+       以前這裡會把 Google 帳號的顯示名稱（Mini Hsu）直接寫進試算表。 */
+    const known = window.orderStaff ? window.orderStaff(r) : '';
+    const list = window.staffList ? window.staffList() : [];
+    const needPick = !known && list.length;
+    const mine = String(r['建立者Email'] || '').trim().toLowerCase() === userEmail().toLowerCase()
+      && !!userEmail();
+    const res = await confirmModal({
       title: '確認客人已取貨？',
       lines: `<p>客戶：<b>${esc(r['客戶名稱'])}</b></p>
               <p style="font-size:15px">應收 <b>${money(r['金額'])}</b>${
                 ordDisc(r) ? `<span style="font-size:13px;font-weight:400;color:var(--ink-3)">（已折 ${money(ordDisc(r))}）</span>` : ''
               }　·　收款 <b>${esc(ordPayWay(r))}</b></p>
-              ${String(r['建立者'] || '').trim() === userName()
-                ? `<p style="font-size:13.5px;color:var(--ink-3)">業務會記 <b>${esc(userName())}</b>（這張單就是你開的）。</p>`
-                : `<div class="alert-box">業務會記 <b>${esc(r['建立者'] || '（未填）')}</b>（當初開單的人），<b>不是你</b>。
+              ${needPick ? '' : mine
+                ? `<p style="font-size:13.5px;color:var(--ink-3)">業務會記 <b>${esc(known)}</b>（這張單就是你開的）。</p>`
+                : `<div class="alert-box">業務會記 <b>${esc(known || r['建立者'] || '（未填）')}</b>（當初開單的人），<b>不是你</b>。
                     你按確認只是幫忙出貨，系統會另外記下出貨的人是 ${esc(userName())}。</div>`}
               <p style="color:var(--ink-2);font-size:14px">按下確定後會從庫存的「預定專區」扣掉，總數才會真正減少：</p>
-              <pre class="pre">${esc(planText(plan, 'ship'))}</pre>`,
+              <pre class="pre">${esc(planText(plan, 'ship'))}</pre>
+              ${needPick
+                ? `<div class="warn-box">這張單的開單者是 <b>${esc(r['建立者'] || '（未填）')}</b>，
+                     <b>在業務同仁名單裡找不到對應的人</b>（舊單沒記 email，或名單還沒加這個人）。<br>
+                     <b>請選這筆業績要算誰的：</b></div>`
+                : ''}`,
+      choices: needPick ? { name: 'staff', require: true, options: list.map(n => ({ v: n, label: n })) } : null,
       okText: '確定，已取貨'
     });
-    if (!ok) return;
+    if (!res) return;
+    const staff = needPick ? res.staff : known;
     await doAction(b, async () => {
       await applyPlan(plan, 'ship');
       await updateBoardRow(r, { 狀態: STATUS.DONE, 完成時間: nowStr(), 完成者: userName(), 庫存狀態: STOCK.SHIPPED });
       let extra = '';
       if (window.createShopSaleFromOrder) {
-        try { await window.createShopSaleFromOrder(r); extra = '，並開了一張來店銷售單'; }
+        try { await window.createShopSaleFromOrder(r, staff); extra = '，並開了一張來店銷售單'; }
         catch (err) { console.warn('自動建立來店銷售單失敗', err); extra = '（來店銷售單建立失敗，請手動補開）'; }
       }
       toast('已完成並扣除庫存' + extra, 'ok');
@@ -1264,7 +1280,10 @@ function confirmModal({ title, lines, okText, danger, choices, preview }) {
     const chipsHTML = choices ? `<div class="field" style="margin-bottom:10px">
         <div class="chips" id="cmChips">
           ${(() => {
-            const first = choices.options.findIndex(o => !o.off);
+            const first = choices.require ? -1
+              : choices.value !== undefined
+                ? choices.options.findIndex(o => o.v === choices.value)
+                : choices.options.findIndex(o => !o.off);
             return choices.options.map((o, i) =>
               `<button class="chip ${i === first ? 'on' : ''}${o.off ? ' off' : ''}"
                  data-v="${esc(o.v)}"${o.off ? ' disabled title="' + esc(o.offNote || '這個選項現在不能用') + '"' : ''}
@@ -1283,7 +1302,15 @@ function confirmModal({ title, lines, okText, danger, choices, preview }) {
       </div></div>`;
     document.body.appendChild(host);
 
-    let picked = choices ? (choices.options.find(o => !o.off) || choices.options[0]).v : undefined;
+    // choices.value 可以指定預選；choices.require = true 代表沒選就不給按確定
+    let picked = choices
+      ? (choices.value !== undefined ? choices.value
+        : choices.require ? null
+          : (choices.options.find(o => !o.off) || choices.options[0]).v)
+      : undefined;
+    const okBtn = host.querySelector('[data-yes]');
+    const syncOk = () => { if (choices && choices.require) okBtn.disabled = (picked === null || picked === ''); };
+    syncOk();
     const drawPreview = () => {
       const el = host.querySelector('#cmPreview');
       if (preview && el) el.innerHTML = preview(picked);
@@ -1293,19 +1320,24 @@ function confirmModal({ title, lines, okText, danger, choices, preview }) {
         if (c.disabled) return;
         picked = c.dataset.v;
         host.querySelectorAll('#cmChips .chip').forEach(x => x.classList.toggle('on', x === c));
-        drawPreview();
+        syncOk(); drawPreview();
       });
     }
     drawPreview();
 
     const done = v => { host.remove(); res(v); };
     host.querySelector('[data-no]').onclick = () => done(null);
-    host.querySelector('[data-yes]').onclick = () => done(choices ? { [choices.name]: picked } : {});
+    okBtn.onclick = () => {
+      if (choices && choices.require && (picked === null || picked === '')) return;
+      done(choices ? { [choices.name]: picked } : {});
+    };
     host.querySelector('.modal').onclick = ev => { if (ev.target.classList.contains('modal')) done(null); };
   });
 }
 
 function userName() { return (S.user && (S.user.name || S.user.email)) || '未知'; }
+/** 登入的 Google 帳號 email——業務名單是靠這個對的，顯示名稱不可靠 */
+function userEmail() { return String((S.user && S.user.email) || '').trim(); }
 
 async function doAction(btn, fn) {
   S.busy = true; btn.disabled = true; const old = btn.textContent; btn.textContent = '處理中…';
@@ -1959,6 +1991,7 @@ async function submitForm() {
     values[C['類型']] = t;
     values[C['建立時間']] = nowStr();
     values[C['建立者']] = userName();
+    values[C['建立者Email']] = userEmail();
     values[C['狀態']] = STATUS.OPEN;           // 扣成功才改已完成
     values[C['庫存狀態']] = STOCK.FAILED;
     Object.keys(f).forEach(k => { if (C[k] !== undefined) values[C[k]] = f[k]; });
@@ -2028,6 +2061,7 @@ async function submitForm() {
     values[C['類型']] = t;
     values[C['建立時間']] = nowStr();
     values[C['建立者']] = userName();
+    values[C['建立者Email']] = userEmail();
     values[C['狀態']] = STATUS.OPEN;
     // 進貨需求開單當下不動庫存，所以是「不適用」，不是「未扣」
     values[C['庫存狀態']] = (plan && t !== TYPES.PURCHASE) ? STOCK.FAILED : STOCK.NA;

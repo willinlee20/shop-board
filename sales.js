@@ -15,7 +15,7 @@ const SALES = {
   LABEL: { shop: '來店', online: '網路', mini: '小賣', dist: '經銷' },
 
   // 名單分頁：先用分頁名稱找，找不到再用「標題列有什麼欄位」認（改名也不會壞）
-  LIST_SHEET: { staff: 'Sales業務同仁名單', mini: '', dist: '' },
+  LIST_SHEET: { staff: ['Sales業務同仁list', 'Sales業務同仁名單'], mini: '', dist: '' },
   LIST_SIG: { staff: '負責業務', mini: '小賣名稱', dist: '經銷商名稱' },
 
   // 網路單：前台只選收款方式，系統自己推結帳狀態
@@ -36,7 +36,9 @@ const SALES = {
   // 小賣／經銷：客人自己給寄件代號，我們只要把代號記下來就好
   CODE_WAY: '收件者提供寄件代號',
 
-  SHIP:   ['未寄出', '已寄出'],
+  // SHIP[0]=未寄出、SHIP[1]=已寄出（程式到處用索引，新的只能往後加）
+  SHIP:   ['未寄出', '已寄出', '訂單已作廢'],
+  SHIP_VOID: '訂單已作廢',
   PICK:   ['未取件', '已取件', '已送達', '未送達', '即將退貨', '退貨路上', '包裹異常'],
   PAY:    ['未結帳', '已結帳'],
   DONE_PICK: ['已取件', '已送達'],          // 這兩種都算貨態完成
@@ -62,11 +64,11 @@ const SH_HEAD = {
   mini: ['id', '訂單日期', '建立時間', '建立者', '銷售小賣', '客戶名稱', '小賣自取', '電話', '取貨方式',
          '訂單內容', '價格', '運費', '成本', '寄送方式', '店名',
          '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '獎金', '備註',
-         '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態', '應收貨款'],
+         '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態', '應收貨款', '庫存狀態'],
   dist: ['id', '訂單日期', '建立時間', '建立者', '經銷名稱', '經銷聯絡電話', '訂單內容', '價格', '運費', '成本',
          '寄送方式', '收貨門市', '收貨人', '收貨人電話',
          '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '備註',
-         '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態', '宅配地址']
+         '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態', '宅配地址', '庫存狀態']
 };
 /** 日結分頁：一間門市一天一列 */
 const CLOSE_HEAD = ['id', '門市', '營業日', '結束時間', '結束者',
@@ -137,7 +139,8 @@ window.initSales = async function (sheets) {
     const sig = SALES.LIST_SIG[key];
     const want = (SALES.LIST_SHEET || {})[key];
     // 先用分頁名稱找，找不到再用標題列特徵認
-    const hit = (want && titles.find(t => t === want))
+    const wants = Array.isArray(want) ? want : (want ? [want] : []);
+    const hit = titles.find(t => wants.includes(t))
       || titles.find(t => (heads[t] || []).some(c => String(c).trim() === sig));
     if (!hit) continue;
     SALE.titles['list_' + key] = hit;
@@ -179,6 +182,12 @@ const numIn = (cls, val, ph, extra) =>
   `<input type="number" inputmode="decimal" class="${cls}" min="0" step="1" value="${val ?? ''}" placeholder="${ph || ''}" ${extra || ''}>`;
 const telIn = (cls, val) => `<input type="tel" inputmode="tel" class="${cls}" value="${sEsc(val || '')}">`;
 const opts = (list, cur) => list.map(o => `<option value="${sEsc(o)}"${o === cur ? ' selected' : ''}>${sEsc(o)}</option>`).join('');
+/** 同 opts，但試算表裡如果是手打的、選單沒有的值，就把它一起列進去並選起來
+    （不然畫面會顯示成第一個選項，看起來像資料被改掉了） */
+const optsKeep = (list, cur) => {
+  const c = String(cur ?? '');
+  return opts(c && !list.includes(c) ? [c].concat(list) : list, c);
+};
 
 /** 依登入 email 猜負責業務 */
 function defaultStaff() {
@@ -270,6 +279,17 @@ function unsettled(kind) {
 }
 /** 作廢／已退貨的單不算應收 */
 const liveOrder = r => String(r['狀態']) !== SALES.VOID && String(r['狀態']) !== SALES.RETURNED;
+/** 錢收到了嗎 */
+const paidOf = r => String(r['結帳狀態']) === '已結帳';
+/* ---- 貨出去了嗎 -------------------------------------------------------
+   只看**寄件狀態**，不看取貨狀態——小賣寄送單的取貨狀態從來沒人在改，
+   拿它當條件的話單子永遠收不起來。
+   自取／店取的單沒有寄件這回事（存成 N/A），視同已出貨。          */
+const shipOf = r => {
+  const v = String(r['寄件狀態'] || '').trim();
+  if (!v || v === SALES.NA) return true;        // 自取／店取：沒有寄件流程
+  return v === SALES.SHIP[1];                   // 已寄出
+};
 
 /* ---- 首頁那顆數字：只算「真的還要人處理」的單 -------------------------
    以前是「所有還沒按收起的單」，所以結清了、作廢了但還沒收起的也會被算進去，
@@ -277,7 +297,9 @@ const liveOrder = r => String(r['狀態']) !== SALES.VOID && String(r['狀態'])
 function needsWork(kind, r) {
   if (!liveOrder(r)) return false;                  // 已作廢／已退貨入庫 → 只是等收起
   if (kind === 'online') return true;               // 網路單要走到會計確認才算結案
-  return String(r['結帳狀態']) !== '已結帳';         // 經銷／小賣：結清了就只等收起
+  // 經銷／小賣：**錢收到了而且貨也寄出去了**才算處理完。
+  // 只看結帳的話，「已結帳但還沒寄」的單會被當成做完了，沒人去寄貨。
+  return !(paidOf(r) && shipOf(r));
 }
 /** 還要處理的張數（首頁紅色數字） */
 const openCount = k => unsettled(k).filter(r => needsWork(k, r)).length;
@@ -973,13 +995,15 @@ async function submitSale() {
     // 不扣庫存的單：庫存異動JSON 留空陣列，之後作廢／退貨才不會把貨「還」回去
     set('庫存異動JSON', noStock ? '[]'
       : JSON.stringify(items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, src }))));
-    set('庫存狀態', noStock ? `不扣（${tags.join('、')}）` : '已扣庫存');
+    // 四種單別都要留下「這張單怎麼扣的」。來店單只有一個門市，不用再標來源；
+    // 其他三種的來源會變（總倉／門市），標出來出納和盤點才查得到
+    set('庫存狀態', noStock ? `不扣（${tags.join('、')}）`
+      : k === 'shop' ? '已扣庫存' : `已扣庫存（${srcLabel(src)}）`);
 
     if (HAS_DISCOUNT(k)) { set('折扣', disc || ''); set('未折金額', gross); }
 
     if (k === 'shop') {
       set('門市', f.store); set('品項明細', itemsText(items)); set('金額', total);
-      set('庫存狀態', noStock ? `不扣（${tags.join('、')}）` : '已扣庫存');
       set('收款方式', f.payWay);
     } else {
       set('訂單內容', itemsText(items)); set('價格', total); set('運費', Number(f.fee) || 0);
@@ -992,8 +1016,6 @@ async function submitSale() {
     if (k === 'online') {
       set('客戶名稱', f.cName.trim()); set('電話', f.tel.trim());
       set('寄送方式', f.sendWay); set('店名', f.storeName.trim());
-      // 出納和撿貨都要知道這張單的貨是從哪裡扣的
-      if (!noStock) set('庫存狀態', `已扣庫存（${srcLabel(src)}）`);
       // 前台只選收款方式，結帳狀態由系統推：已收貨款 → 已結帳
       const paidNow = f.collect === SALES.COLLECT_PAID;
       set('收款方式', f.collect);
@@ -1063,17 +1085,28 @@ async function submitSale() {
 /**
  * 預訂單的業務＝**當初開單的人**，不是按「確認取貨完成」的人。
  * 按確認的只是幫忙出貨，業績不該記到他頭上。
- * 名字對得上業務名單就用名單上的寫法，對不上就照原樣填——
- * 寧可填一個名單外的名字，也不能默默換成別人。
+ *
+ * 比對順序：**email 優先**。
+ * 以前只拿「建立者」（Google 帳號的顯示名稱）去比業務名單，
+ * 可是同仁的 Google 名稱是「Mini Hsu」、名單上寫的是「小美」，
+ * 永遠對不上，就把 Mini Hsu 直接寫進負責業務欄了。
+ * 現在留言板會順手記下開單者的 email，照 email 查名單就一定對得到。
+ *
+ * 回傳 '' 代表**查不到**——上層要跳下拉讓人自己選，不可以隨便塞一個名字。
  */
 function staffOfOrder(r) {
+  const mail = String(r['建立者Email'] || '').trim().toLowerCase();
+  if (mail) {
+    const byMail = SALE.lists.staff.find(x => String(x.contact || '').trim().toLowerCase() === mail);
+    if (byMail) return byMail.name;
+  }
+  // 舊單沒有 email 欄：退一步用名字比對，但只接受**名單上有的**名字
   const who = String(r['建立者'] || '').trim();
-  if (!who) return defaultStaff();
-  const hit = SALE.lists.staff.find(x => String(x.name || '').trim() === who);
-  return hit ? hit.name : who;
+  const byName = SALE.lists.staff.find(x => String(x.name || '').trim() === who);
+  return byName ? byName.name : '';
 }
 
-window.createShopSaleFromOrder = async function (r) {
+window.createShopSaleFromOrder = async function (r, pickStaff) {
   if (!SALE.titles.shop) return;
   const items = parseJSON(r['品項JSON'], []);
   if (!items.length) return;
@@ -1086,7 +1119,8 @@ window.createShopSaleFromOrder = async function (r) {
   const disc = Math.max(0, Number(r['折扣']) || 0);
   const gross = Number(r['未折金額']) || (net + disc);
   const pw = SALES.PAYWAY.includes(r['收款方式']) ? r['收款方式'] : SALES.PAYWAY[0];
-  const staff = staffOfOrder(r);
+  // 業務由上層決定：對得到名單就用名單上的名字，對不到就是同事在確認視窗選的
+  const staff = String(pickStaff || staffOfOrder(r) || '').trim();
   set('id', 'X' + Date.now().toString(36).toUpperCase());
   set('訂單日期', todayStr()); set('建立時間', nowStr()); set('建立者', userName());
   set('門市', r['門市']); set('負責業務', staff);
@@ -1094,7 +1128,8 @@ window.createShopSaleFromOrder = async function (r) {
   set('金額', net); set('折扣', disc || ''); set('未折金額', gross); set('收款方式', pw);
   set('成本', costOf(items.map(i => ({ row: i.row, qty: i.qty }))));
   set('備註', `由預訂單「${r['客戶名稱'] || ''}」（${r.id}）自動產生。`
-    + `業務 ${staff || '（未填）'}（開單者），出貨 ${userName()}。實際出貨來源：${srcs}。`);
+    + `業務 ${staff || '（未填）'}（${staffOfOrder(r) ? '開單者' : '出貨時指定'}），`
+    + `出貨 ${userName()}。實際出貨來源：${srcs}。`);
   set('品項JSON', r['品項JSON']);
   set('庫存異動JSON', '[]');                    // 空的 → 不會再動庫存
   set('庫存狀態', '不扣（來自預訂單）');
@@ -1102,6 +1137,11 @@ window.createShopSaleFromOrder = async function (r) {
   await appendRow(SALE.titles.shop, v);
   await loadSales();
 };
+
+/** 留言板要用：這張預訂單對得到業務名單嗎（對不到就要跳下拉讓人選） */
+window.orderStaff = r => staffOfOrder(r);
+/** 留言板要用：業務名單上的名字 */
+window.staffList = () => staffNames().filter(n => String(n || '').trim());
 
 /* ----------------------------- 來店銷售紀錄 ---------------------------- */
 const shopVoided = r => String(r['狀態']) === SALES.VOID;
@@ -1598,8 +1638,8 @@ function renderRecv(kind) {
   // 網路單同事要照這一頁撿貨包貨，所以直接把每一張單攤開，不分兩層
   if (kind === 'online') return renderPickList(kind, name);
 
-  const rows = unsettled(kind).filter(r => String(r['結帳狀態']) !== '已結帳' && liveOrder(r));
-  const done = unsettled(kind).filter(r => String(r['結帳狀態']) === '已結帳' && liveOrder(r));
+  const rows = unsettled(kind).filter(r => liveOrder(r) && needsWork(kind, r));
+  const done = unsettled(kind).filter(r => liveOrder(r) && !needsWork(kind, r));
   // 已作廢／已退貨入庫，但還沒有人按「收起」的單。
   // 以前這兩段都加了 liveOrder 過濾，這種單就兩邊都排不進來——
   // 首頁的數字算得到、點進來卻看不到，同事只會覺得「明明結清了還掛著」。
@@ -1609,9 +1649,10 @@ function renderRecv(kind) {
   rows.forEach(r => {
     const w = recvWho(r, kind);
     const e = bag.get(w) || { who: w, n: 0, owe: 0, oldest: '', ship: 0 };
-    e.n++; e.owe += owedOf(r);
+    e.n++;
+    if (!paidOf(r)) e.owe += owedOf(r);        // 已結帳但沒寄的單不欠錢，只是還沒出貨
     if (!e.oldest || String(r['訂單日期']) < e.oldest) e.oldest = String(r['訂單日期']);
-    if (String(r['寄件狀態']) === SALES.SHIP[0]) e.ship++;
+    if (!shipOf(r)) e.ship++;
     bag.set(w, e);
   });
   const groups = [...bag.values()].sort((a, b) => b.owe - a.owe);
@@ -1619,15 +1660,16 @@ function renderRecv(kind) {
 
   $('salesView').innerHTML = backBar(name + '應收待結') +
     (groups.length ? `
-      <div class="recv-total"><span>${groups.length} 個${name === '網路' ? '客戶' : name}未結　·　${rows.length} 張單</span>
+      <div class="recv-total"><span>${groups.length} 個${name === '網路' ? '客戶' : name}待處理　·　${rows.length} 張單</span>
         <b>${money(total)}</b></div>
       ${groups.map(g => `<button class="sum-card" data-who="${sEsc(g.who)}">
           <span class="who3">${sEsc(g.who)}</span>
           <span class="owe">${money(g.owe)}</span>
-          <span class="sub2">${g.n} 張未結　·　最早 ${sEsc(g.oldest || '—')}${g.ship ? `　·　${g.ship} 張未寄出` : ''}<i class="go">點開處理 ›</i></span>
+          <span class="sub2">${g.n} 張待處理　·　最早 ${sEsc(g.oldest || '—')}${
+            g.ship ? `　·　<b class="warn-ship">${g.ship} 張未寄出</b>` : ''}<i class="go">點開處理 ›</i></span>
         </button>`).join('')}`
       : `<div class="empty">目前沒有未結的${name}訂單 🎉</div>`) +
-    (done.length ? `<div class="sec-title">已結帳、等收起（${done.length}）
+    (done.length ? `<div class="sec-title">已結帳、已寄出，等收起（${done.length}）
         <button class="btn btn-sm btn-ok bulk" data-bulk="done">✓ 全部收起</button></div>
       ${done.map(r => `<button class="sum-card" data-who="${sEsc(recvWho(r, kind))}">
           <span class="who3">${sEsc(recvWho(r, kind))}</span>
@@ -1693,7 +1735,7 @@ const accDone  = r => String(r['會計確認']) === '是';
 /** 這張網路單開單時記的收款方式（已收貨款／貨到付款）；舊單沒填就回空字串，不亂猜 */
 const collectOf = r => SALES.COLLECT.includes(r['收款方式']) ? String(r['收款方式']) : '';
 /** 貨態全部跑完了（已結帳 ＋ 已取件／已送達），只差會計確認 */
-const accReady = r => String(r['結帳狀態']) === '已結帳'
+const accReady = r => paidOf(r) && shipOf(r)
   && SALES.DONE_PICK.includes(String(r['取貨狀態']));
 
 const PICK_STAGES = [
@@ -1888,11 +1930,10 @@ function recvCard(r, kind) {
     || SALES.DONE_PICK.includes(String(r['取貨狀態']));
   const na = v => String(v) === SALES.NA;
   const dead = returned || voided2;
-  // 小賣自取的單沒有寄件／取貨（都是 N/A），付完就算完成了
-  const pickDone = SALES.DONE_PICK.includes(String(r['取貨狀態'])) || na(r['取貨狀態']);
   const canReturn = shipped && !dead;
   const canVoid = !shipped && !dead;
-  const canClose = dead || (paid && pickDone);
+  // v4.4：收起要「已結帳 ＋ 已寄出」。取貨狀態不列入條件——沒人在改它。
+  const canClose = dead || (paid && shipOf(r));
   return `<div class="rec-card${dead ? ' is-void' : ''}" data-id="${sEsc(r.id)}" data-row="${r._row}">
     <div class="rec-top">
       <span class="who2">${sEsc(who || '（未填）')}</span>
@@ -1908,8 +1949,8 @@ function recvCard(r, kind) {
     ${kind === 'mini' ? `<div class="bonus-line">銷貨金額 ${money(grossOf(r))}　−　銷售獎金 <b>${money(bonusOf(r))}</b>　→　應收貨款 <b>${money(owedOf(r))}</b></div>` : ''}
     ${r['備註'] ? `<div class="rec-meta">備註：${sEsc(r['備註'])}</div>` : ''}
     <div class="st-grid">
-      <div><label>寄件狀態</label><select class="rSel" data-f="寄件狀態">${opts([SALES.NA].concat(SALES.SHIP), r['寄件狀態'])}</select></div>
-      <div><label>取貨狀態</label><select class="rSel" data-f="取貨狀態">${opts([SALES.NA].concat(SALES.PICK), r['取貨狀態'])}</select></div>
+      <div><label>寄件狀態</label><select class="rSel" data-f="寄件狀態">${optsKeep([SALES.NA].concat(SALES.SHIP), r['寄件狀態'])}</select></div>
+      <div><label>取貨狀態</label><select class="rSel" data-f="取貨狀態">${optsKeep([SALES.NA].concat(SALES.PICK), r['取貨狀態'])}</select></div>
       <div><label>寄件代碼</label><input class="rInp" data-f="寄件代碼" value="${sEsc(r['寄件代碼'] || '')}"></div>
       <div><label>寄送方式</label><select class="rSel" data-f="寄送方式">${opts([SALES.NA].concat(kind === 'dist' ? distWays() : miniWays()), r['寄送方式'])}</select></div>
       ${(() => {
@@ -2029,6 +2070,7 @@ function wireRecv(kind) {
         await applyPlan(plan, 'unsell');
         await patchSale(kind, r, {
           狀態: SALES.RETURNED,
+          庫存狀態: '已退回庫存',
           備註: (r['備註'] ? r['備註'] + ' / ' : '') + `${nowStr()} ${userName()} 退貨入庫`
         });
         await loadSales(); await loadProducts(); reRenderRecv(kind);
@@ -2118,6 +2160,9 @@ async function voidSale(kind, r) {
     if (plan.length) await applyPlan(plan, 'unsell');
     await patchSale(kind, r, {
       狀態: SALES.VOID,
+      // 作廢的單一定還沒寄出（已寄出的只能走「退貨入庫」），
+      // 把寄件狀態也標起來，撿貨那一頁才不會有人照著「未寄出」去寄
+      寄件狀態: SALES.SHIP_VOID,
       庫存狀態: plan.length ? '已退回庫存' : (r['庫存狀態'] || ''),
       備註: (r['備註'] ? r['備註'] + ' / ' : '') + `${nowStr()} ${userName()} 訂單作廢${plan.length ? '，庫存已退回' : ''}`
     });

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="4.3">
+<meta name="app-version" content="4.4">
 <title>西門龍門儀錶板</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -560,6 +560,10 @@ textarea{min-height:84px;resize:vertical}
 .pick-flag{background:var(--bad-soft);border:1px solid #fecaca;color:#991b1b;border-radius:8px;
   padding:7px 11px;font-size:13px;font-weight:500;margin-bottom:9px}
 .pick-flag.back{background:var(--warn-soft);border-color:#fcd34d;color:#b45309}
+/* 第一層彙整上的「N 張未寄出」要跳出來，不然會被當成一般小字 */
+.sum-card .warn-ship{color:#b45309;font-weight:700}
+/* 寄件狀態＝訂單已作廢：紅底，撿貨的人一眼就知道別碰 */
+.pchip[data-val="訂單已作廢"].on{background:var(--bad-soft);border-color:#fca5a5;color:#991b1b}
 .pick-note{font-size:12.5px;color:var(--ink-2);margin-bottom:9px;overflow-wrap:anywhere}
 .pick-row{display:grid;grid-template-columns:58px 1fr;align-items:center;gap:8px;margin-bottom:7px}
 .pick-row .pl{font-size:12px;color:var(--ink-3);white-space:nowrap}
@@ -717,7 +721,7 @@ textarea{min-height:84px;resize:vertical}
 <div id="toastHost"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="app.js?v=4.3"></script>
-<script src="sales.js?v=4.3"></script>
+<script src="app.js?v=4.4"></script>
+<script src="sales.js?v=4.4"></script>
 </body>
 </html>
