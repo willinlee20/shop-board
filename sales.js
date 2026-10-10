@@ -260,13 +260,32 @@ function fillItems(list, src) {
 /* ----------------------------- 模式切換 -------------------------------- */
 function wireSalesUI() {
   document.querySelectorAll('.mode-tab').forEach(t => t.onclick = () => setMode(t.dataset.mode));
+  syncPerfTab();
+}
+/** 按「↻ 更新」之後：停在業績分析就把銷售資料重抓一次再重算，不然數字不會變 */
+window.onAfterRefresh = async () => {
+  if (SALE.mode !== 'perf') return;
+  try { await loadSales(); renderPerf(); } catch (e) { console.warn('業績分析重算失敗', e); }
+};
+
+/** 「業績分析」分頁只有幹部看得到。名單是登入後才讀到的，所以要在這裡再同步一次 */
+function syncPerfTab() {
+  const t = $('perfTab');
+  if (!t) return;
+  const ok = canSeePerf();
+  t.classList.toggle('hidden', !ok);
+  if (!ok && SALE.mode === 'perf') setMode('sales');
 }
 function setMode(m) {
+  // 非幹部就算想辦法切到業績分析，也一律退回銷售紀錄
+  if (m === 'perf' && !canSeePerf()) m = 'sales';
   SALE.mode = m;
   document.querySelectorAll('.mode-tab').forEach(x => x.classList.toggle('on', x.dataset.mode === m));
   $('boardView').classList.toggle('hidden', m !== 'board');
   $('salesView').classList.toggle('hidden', m !== 'sales');
+  if ($('perfView')) $('perfView').classList.toggle('hidden', m !== 'perf');
   if (m === 'sales') renderSalesView();
+  if (m === 'perf') renderPerf();
 }
 
 /* ----------------------------- 畫面分派 -------------------------------- */
@@ -335,10 +354,7 @@ function renderSales() {
       <button class="pos-btn" data-sv="health"><span class="ico">🩺</span>資料庫品項健檢
         <span class="sub">核對庫存表的產品名稱</span></button>
     </div>
-    ${canSeePerf() ? `<div class="pos-row">
-      <button class="pos-btn" data-sv="perf"><span class="ico">📊</span>業績報表
-        <span class="sub">每月各業務的業績 · 毛利 · 客單</span></button>
-    </div>` : ''}
+
     <div class="pos-row">
       ${recvBtn('dist', '🏪', '經銷應收待結')}
       ${recvBtn('online', '📦', '網路應收待結')}
@@ -421,7 +437,6 @@ document.addEventListener('click', e => {
   if (v === 'query') return renderQuery();
   if (v === 'shoplog') return renderShopLog();
   if (v === 'health') return renderHealth();
-  if (v === 'perf') return canSeePerf() ? renderPerf() : renderSales();
   if (v.startsWith('recv-')) return renderRecv(v.slice(5));
 });
 
@@ -1197,7 +1212,6 @@ function shopPerf() {
     return d >= fromStr && d <= today && !shopVoided(r);
   });
   const sum = inRange.reduce((s, r) => s + (Number(r['金額']) || 0), 0);
-  const cost = inRange.reduce((s, r) => s + (Number(r['成本']) || 0), 0);
   const group = key => {
     const m = new Map();
     inRange.forEach(r => {
@@ -1217,7 +1231,6 @@ function shopPerf() {
       <span class="amt">${money(sum)}</span>
     </div>
     ${line('門市', group('門市'))}
-    ${line('業務', group('負責業務'))}
     ${(() => {
       const cash = inRange.reduce((t, r) => t + (payWayOf(r) === '現金' ? (Number(r['金額']) || 0) : 0), 0);
       return sum ? `<div class="perf-row"><span class="pk">收款</span><span class="pv">
@@ -1228,7 +1241,6 @@ function shopPerf() {
       return dis ? `<div class="perf-row"><span class="pk">折扣</span><span class="pv">
         <i><b>共減</b> ${money(dis)}</i><i><b>未折</b> ${money(sum + dis)}</i></span></div>` : '';
     })()}
-    ${sum ? `<div class="perf-row"><span class="pk">毛利</span><span class="pv"><i>${money(sum - cost)}　<b style="font-weight:400;color:var(--ink-3)">成本 ${money(cost)}</b></i></span></div>` : ''}
   </div>`;
 }
 
@@ -2293,12 +2305,13 @@ function perfTable(list, best) {
 }
 
 function renderPerf() {
-  // 按鈕本來就只給幹部看，這裡再擋一次——免得有人從別的路徑跑進來
-  if (!canSeePerf()) { SALE.view = 'home'; return renderSales(); }
-  SALE.view = 'perf';
+  // 分頁本來就只給幹部看，這裡再擋一次——免得有人從別的路徑跑進來
+  if (!canSeePerf()) return setMode('sales');
+  const host = $('perfView');
+  if (!host) return;
   const data = perfData(), months = perfMonths(data);
   if (!months.length) {
-    $('salesView').innerHTML = backBar('業績報表') + `<div class="empty">還沒有來店銷售資料</div>`;
+    host.innerHTML = `<div class="empty">還沒有來店銷售資料</div>`;
     return;
   }
   if (!SALE.perfMonth || !data.has(SALE.perfMonth)) SALE.perfMonth = months[0];
@@ -2314,7 +2327,9 @@ function renderPerf() {
   const prev = prevM ? sumRows([...data.get(prevM).values()].filter(e => !isNonStaff(e.who))) : null;
   const gp = tot.rev - tot.cost;
 
-  $('salesView').innerHTML = backBar('業績報表') + `
+  host.innerHTML = `
+    <div class="pf-head"><h2>業績分析</h2>
+      <span class="pf-tag">🔒 只有幹部看得到</span></div>
     <div class="pf-months">${months.slice(0, 18).map(x =>
       `<button class="pf-m${x === m ? ' on' : ''}" data-pm="${sEsc(x)}">${sEsc(x.replace('-', ' / '))}</button>`).join('')}</div>
 
@@ -2349,7 +2364,7 @@ function renderPerf() {
       補登單、預訂單帶過來的單也都照算。</p>
     </div>`;
 
-  document.querySelectorAll('#salesView .pf-m').forEach(b => b.onclick = () => {
+  host.querySelectorAll('.pf-m').forEach(b => b.onclick = () => {
     SALE.perfMonth = b.dataset.pm;
     renderPerf();
   });
@@ -2571,7 +2586,6 @@ function todayPanel() {
       <div class="dp-split">
         <span>現金 <b>${money(d.cash)}</b></span>
         <span>匯款 <b>${money(d.bank)}</b></span>
-        ${d.amount ? `<span>毛利 <b>${money(d.amount - d.cost)}</b></span>` : ''}
         ${d.disc ? `<span class="v">折扣 −${money(d.disc)}</span>` : ''}
         ${d.voided ? `<span class="v">作廢 ${d.voided} 筆</span>` : ''}
       </div>
@@ -2599,9 +2613,7 @@ async function closeDay(store) {
     lines: `<pre class="pre">筆數　${d.n} 筆${d.voided ? `（另有 ${d.voided} 筆已作廢，不計入）` : ''}
 營業額　${money(d.amount)}${d.disc ? `（已扣折扣 ${money(d.disc)}）` : ''}
 　現金　${money(d.cash)}
-　匯款　${money(d.bank)}
-成本　${money(d.cost)}
-毛利　${money(d.amount - d.cost)}</pre>
+　匯款　${money(d.bank)}</pre>
       <div class="alert-box">結束之後，<b>${sEsc(store)}</b> 的新增來店銷售單預設日期會變成
         <b>${sEsc(dayAdd(day, 1))}</b>（還是可以手動改回來），紀錄上也會畫一條分隔線。
         按錯了可以再按「↩ 取消日結」。</div>`,

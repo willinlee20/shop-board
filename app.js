@@ -5,7 +5,7 @@
    ========================================================================= */
 
 /* ----------------------------- 版本 ------------------------------------ */
-const APP_VERSION = '4.6';          // 每次改版都會更新，畫面右上角看得到
+const APP_VERSION = '4.7';          // 每次改版都會更新，畫面右上角看得到
 const APP_DATE = '2026-10-10';
 
 /* ----------------------------- 設定區 -----------------------------------
@@ -517,7 +517,12 @@ function startPoll() {
 
 async function refreshAll(msg) {
   S.busy = true;
-  try { await loadProducts(); await loadBoard(); render(); if (msg) toast(msg, 'ok'); }
+  try {
+    await loadProducts(); await loadBoard(); render();
+    // 銷售模組要自己決定重抓什麼（例如業績分析那一頁要重算），不然按「更新」不會動
+    if (window.onAfterRefresh) await window.onAfterRefresh();
+    if (msg) toast(msg, 'ok');
+  }
   finally { S.busy = false; }
 }
 
