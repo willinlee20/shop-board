@@ -22,6 +22,11 @@ const SALES = {
 
   // 網路單：前台只選收款方式，系統自己推結帳狀態
   COLLECT: ['已收貨款', '貨到付款'],
+  /* 小賣的收款方式（開單時選）。大部分小賣是長期合作、月底一次結，所以預設月結貨款。
+     選「已收貨款」＝錢當場收到了（自取／店取常見），結帳狀態直接記已結帳；
+     另外兩個都是錢還沒到手，一律記未結帳，之後到「小賣應收待結」按已結帳。 */
+  MINI_COLLECT: ['月結貨款', '貨到付款', '已收貨款'],
+  MINI_PAID: '已收貨款',
   COLLECT_PAID: '已收貨款',              // 選這個 → 結帳狀態直接帶「已結帳」
   COLLECT_COD:  '貨到付款',              // 網路單的預設（大部分是貨到付款）
   VOID: '已作廢',
@@ -66,7 +71,7 @@ const SH_HEAD = {
   mini: ['id', '訂單日期', '建立時間', '建立者', '銷售小賣', '客戶名稱', '小賣自取', '電話', '取貨方式',
          '訂單內容', '價格', '運費', '成本', '寄送方式', '店名',
          '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '獎金', '備註',
-         '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態', '應收貨款', '庫存狀態'],
+         '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態', '應收貨款', '庫存狀態', '收款方式'],
   dist: ['id', '訂單日期', '建立時間', '建立者', '經銷名稱', '經銷聯絡電話', '訂單內容', '價格', '運費', '成本',
          '寄送方式', '收貨門市', '收貨人', '收貨人電話',
          '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '備註',
@@ -476,6 +481,7 @@ function openSaleForm(kind) {
     store: store0,
     groups: [newSpecGroup()],
     cName: '', tel: '', note: '', noteTags: [], fee: '', bonus: '', discount: '', payStatus: SALES.PAY[0], payDate: '',
+    miniCollect: SALES.MINI_COLLECT[0],
     collect: SALES.COLLECT_COD,        // 網路單預設貨到付款
     payWay: SALES.PAYWAY[0],           // 來店單：現金／匯款
     noStock: '',                       // 網路單庫存處理：'' = 照 onSrc 扣；agent／order = 不扣
@@ -616,6 +622,19 @@ function renderSaleBody() {
       </div></div>
     <div class="field"><label>結帳日（未結帳可空白）</label>
       <input type="date" id="fPayDate" value="${f.payDate}"></div>`;
+  /* 小賣：開單時只選「這筆錢怎麼收」，不在這裡決定結沒結帳。
+     已收貨款＝當場收到（自取／店取常見），系統直接記已結帳；
+     月結貨款、貨到付款都是錢還沒到手，記未結帳，之後到「小賣應收待結」按。 */
+  const miniPaid = f.miniCollect === SALES.MINI_PAID;
+  const miniCollectField = `
+    <div class="field"><label>收款方式 <span class="req">*</span></label>
+      <div class="chips big-chips" id="mcChips">
+        ${SALES.MINI_COLLECT.map(c => `<button class="chip${c === f.miniCollect ? ' on' : ''}" data-mc="${sEsc(c)}">${sEsc(c)}</button>`).join('')}
+      </div>
+      <div class="hint-row${miniPaid ? ' paid' : ''}">${miniPaid
+        ? '錢已經收到了 → 試算表直接記「<b>已結帳</b>」，不用再去應收待結按'
+        : `先記「<b>未結帳</b>」，錢收到之後到「<b>小賣應收待結</b>」按已結帳`}</div>
+    </div>`;
   const feeField = `<div class="field"><label>運費</label>${numIn('fFee', f.fee, '0')}</div>`;
 
   let html = dateField;
@@ -681,7 +700,7 @@ function renderSaleBody() {
         ${byCode(f.sendWay) ? codeField()
           : `<div class="field"><label>店名</label><input type="text" id="fStoreName" value="${sEsc(f.storeName)}"></div>`}
         ${feeField}` : '')
-      + bonusBlock() + payFields + staffField + noteField;
+      + bonusBlock() + miniCollectField + staffField + noteField;
   }
 
   if (f.kind === 'dist') {
@@ -796,6 +815,7 @@ function wireSaleBody() {
     renderSaleBody();
   });
   document.querySelectorAll('#payChips .chip').forEach(c => c.onclick = () => { f.payStatus = c.dataset.pay; renderSaleBody(); });
+  document.querySelectorAll('#mcChips .chip').forEach(c => c.onclick = () => { f.miniCollect = c.dataset.mc; renderSaleBody(); });
   document.querySelectorAll('#payWayChips .chip').forEach(c => c.onclick = () => { f.payWay = c.dataset.payway; renderSaleBody(); });
   document.querySelectorAll('#pickChips .chip').forEach(c => c.onclick = () => { f.pickup = c.dataset.pick; renderSaleBody(); });
   document.querySelectorAll('#wayChips .chip').forEach(c => c.onclick = () => { f.sendWay = c.dataset.way; renderSaleBody(); });
@@ -1060,7 +1080,12 @@ async function submitSale() {
       set('寄送方式', isSelf ? na : (posting ? f.sendWay : na));
       set('店名', isSelf ? na : (posting && !code ? f.storeName.trim() : na));
       if (code) set('寄件代碼', f.shipCode.trim());
-      if (isSelf) { set('結帳狀態', f.payStatus); }
+      // 收款方式決定結帳狀態：已收貨款＝錢到手了，其他兩種都還沒
+      const mPaid = f.miniCollect === SALES.MINI_PAID;
+      set('收款方式', f.miniCollect);
+      set('結帳狀態', mPaid ? '已結帳' : '未結帳');
+      set('結帳日', mPaid ? (f.payDate || f.date) : '');
+      set('結帳確認者', mPaid ? userName() + ' ' + nowStr() : '');
       const bn = bonusNums();
       set('獎金', bn.bonus || ''); set('應收貨款', bn.net);
     }
@@ -1389,7 +1414,9 @@ function openSaleEdit(kind, r) {
     f.sendWay = miniWays().includes(r['寄送方式']) ? r['寄送方式'] : SALES.SEND_WAY[0];
     f.storeName = r['店名'] === SALES.NA ? '' : (r['店名'] || '');
     f.shipCode = r['寄件代碼'] === SALES.NA ? '' : (r['寄件代碼'] || '');
-    f.payStatus = SALES.PAY.includes(r['結帳狀態']) ? r['結帳狀態'] : SALES.PAY[0];
+    f.miniCollect = SALES.MINI_COLLECT.includes(r['收款方式']) ? r['收款方式']
+      // 舊單沒有收款方式欄：已經結過帳的視為已收貨款，其他當月結
+      : (String(r['結帳狀態']) === '已結帳' ? SALES.MINI_PAID : SALES.MINI_COLLECT[0]);
     f.payDate = r['結帳日'] || '';
   }
   if (kind === 'dist') {
@@ -1555,8 +1582,13 @@ async function submitShopEdit() {
         電話: isSelf ? SALES.NA : f.tel.trim(), 取貨方式: f.pickup,
         寄送方式: isSelf ? SALES.NA : (posting ? f.sendWay : SALES.NA),
         店名: isSelf ? SALES.NA : (posting && !byCode(f.sendWay) ? f.storeName.trim() : SALES.NA),
-        結帳狀態: f.payStatus, 結帳日: f.payDate
+        收款方式: f.miniCollect
       });
+      // 改成「已收貨款」才把結帳狀態拉成已結帳；已經在應收待結結過帳的單不要被改回未結帳
+      const mPaid = f.miniCollect === SALES.MINI_PAID || String(r['結帳狀態']) === '已結帳';
+      patch['結帳狀態'] = mPaid ? '已結帳' : '未結帳';
+      patch['結帳日'] = mPaid ? (r['結帳日'] || f.payDate || f.date) : '';
+      patch['結帳確認者'] = mPaid ? (r['結帳確認者'] || userName() + ' ' + nowStr()) : '';
       const bn = bonusNums();
       patch['獎金'] = bn.bonus || ''; patch['應收貨款'] = bn.net;
       if (posting && byCode(f.sendWay)) patch['寄件代碼'] = f.shipCode.trim();
@@ -1757,6 +1789,10 @@ async function archiveMany(kind, rows, opt) {
    同一張單可能同時卡在兩個階段（例如又沒寄出、又沒結帳），
    所以這是「要注意什麼」的篩選，不是把單子切成互斥的三堆。        */
 const accDone  = r => String(r['會計確認']) === '是';
+/** 小賣單的收款方式。舊單沒有這一欄：已經結過帳的視為已收貨款，其他當月結貨款 */
+const miniCollectOf = r => SALES.MINI_COLLECT.includes(r['收款方式']) ? String(r['收款方式'])
+  : (String(r['結帳狀態']) === '已結帳' ? SALES.MINI_PAID : SALES.MINI_COLLECT[0]);
+
 /** 這張網路單開單時記的收款方式（已收貨款／貨到付款）；舊單沒填就回空字串，不亂猜 */
 const collectOf = r => SALES.COLLECT.includes(r['收款方式']) ? String(r['收款方式']) : '';
 /** 貨態全部跑完了（已結帳 ＋ 已取件／已送達），只差會計確認 */
@@ -1963,6 +1999,8 @@ function recvCard(r, kind) {
     <div class="rec-top">
       <span class="who2">${sEsc(who || '（未填）')}</span>
       ${dead ? `<span class="tag tag-cancel">${sEsc(r['狀態'])}</span>` : ''}
+      ${kind === 'mini' && miniCollectOf(r)
+        ? `<span class="pill-col ${miniCollectOf(r) === SALES.MINI_PAID ? 'prepaid' : 'cod'}">${sEsc(miniCollectOf(r))}</span>` : ''}
       <span class="pill-pay ${paid ? 'yes' : 'no'}">${sEsc(r['結帳狀態'] || '未結帳')}</span>
       <span class="amt">${money(r['價格'])}${Number(r['運費']) ? ` <span style="font-size:12px;font-weight:400;color:var(--ink-3)">+運 ${money(r['運費'])}</span>` : ''}</span>
     </div>
@@ -1990,6 +2028,8 @@ function recvCard(r, kind) {
       ${kind === 'mini' ? `
         <div><label>銷售獎金</label><input class="rInp bn-in" data-f="獎金" type="number" inputmode="decimal" value="${sEsc(r['獎金'] ?? '')}" placeholder="0"></div>
         <div><label>應收貨款</label><input class="rInp bn-in" data-f="應收貨款" type="number" inputmode="decimal" value="${sEsc(r['應收貨款'] ?? '')}" placeholder="${grossOf(r)}"></div>` : ''}
+      ${kind === 'mini' ? `<div><label>收款方式</label>
+        <select class="rSel" data-f="收款方式">${optsKeep(SALES.MINI_COLLECT, miniCollectOf(r))}</select></div>` : ''}
       <div><label>結帳狀態</label><select class="rSel" data-f="結帳狀態">${opts(SALES.PAY, r['結帳狀態'])}</select></div>
       <div><label>結帳日</label><input class="rInp" data-f="結帳日" type="date" value="${sEsc(r['結帳日'] || '')}"></div>
     </div>
@@ -2070,6 +2110,11 @@ function wireRecv(kind) {
     const save = card.querySelector('[data-recsave]');
     if (save) save.onclick = async () => {
       if (!Object.keys(patch).length) return toast('沒有變更');
+      // 小賣：收款方式改成「已收貨款」＝錢收到了，結帳狀態自動跟上
+      if (kind === 'mini' && patch['收款方式'] === SALES.MINI_PAID && !paidOf(r)) {
+        patch['結帳狀態'] = '已結帳';
+        if (!r['結帳日']) patch['結帳日'] = todayStr();
+      }
       if (patch['結帳狀態'] === '已結帳' && r['結帳狀態'] !== '已結帳') patch['結帳確認者'] = userName() + ' ' + nowStr();
       save.disabled = true; save.textContent = '儲存中…';
       try { await patchSale(kind, r, patch); await loadSales(); reRenderRecv(kind); toast('已儲存', 'ok'); }
