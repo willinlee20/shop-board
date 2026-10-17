@@ -4,17 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>永昇現貨表</title>
+<title>全產品現貨表</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg:#f1f5f9; --card:#ffffff; --ink:#0f172a; --ink-2:#475569; --ink-3:#94a3b8;
-  --line:#e2e8f0; --brand:#1d4ed8; --brand-soft:#eef2ff;
-  --ok:#059669; --ok-soft:#ecfdf5; --warn:#d97706; --warn-soft:#fffbeb;
-  --bad:#dc2626; --bad-soft:#fef2f2;
-  --r:14px; --shadow:0 1px 2px rgba(15,23,42,.06),0 8px 24px -12px rgba(15,23,42,.12);
+  /* 賽車風：碳黑底、賽車紅重點色，數字像計時板 */
+  --bg:#0E0E13; --card:#17171F; --card-2:#1E1E28;
+  --ink:#F4F4F7; --ink-2:#A8A8B8; --ink-3:#6E6E80;
+  --line:#2A2A36; --brand:#E10600; --brand-soft:#2A0D0C;
+  --ok:#2FD47A; --warn:#FFB020; --bad:#FF4D4D;
+  --r:12px; --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px -14px rgba(0,0,0,.8);
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
@@ -27,27 +28,33 @@ button,input,select{font-family:inherit;font-size:inherit;color:inherit}
 .hidden{display:none!important}
 
 /* ---------- 頂部 ---------- */
-header{background:var(--card);border-bottom:1px solid var(--line);
-  position:sticky;top:0;z-index:20;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+header{background:#121219;border-bottom:2px solid var(--brand);
+  position:sticky;top:0;z-index:20;box-shadow:0 2px 14px rgba(0,0,0,.5)}
 .head-in{max-width:980px;margin:0 auto;padding:12px 16px 0}
 .brand{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.brand .mark{width:34px;height:34px;border-radius:9px;background:var(--brand);
-  color:#fff;display:grid;place-items:center;font-size:17px;flex:0 0 auto}
-.brand h1{margin:0;font-size:19px;font-weight:800;letter-spacing:-.01em}
+.brand .mark{width:36px;height:36px;border-radius:7px;background:var(--brand);
+  display:grid;place-items:center;flex:0 0 auto;
+  box-shadow:0 0 0 1px rgba(255,255,255,.08) inset}
+.brand .mark svg{display:block}
+.brand h1{margin:0;font-size:19px;font-weight:800;letter-spacing:.02em}
 .brand .sub{font-size:12px;color:var(--ink-3);width:100%;margin-top:-2px}
 .toolbar{display:flex;gap:8px;align-items:center;margin:11px 0 0;flex-wrap:wrap}
-#q{flex:1 1 180px;min-width:0;border:1.5px solid var(--line);border-radius:10px;
-  padding:9px 12px;font-size:15px;background:#fff}
-#q:focus{outline:none;border-color:var(--brand)}
-.btn{border:1.5px solid var(--line);background:#fff;border-radius:10px;
+#q{flex:1 1 180px;min-width:0;border:1.5px solid var(--line);border-radius:8px;
+  padding:9px 12px;font-size:15px;background:var(--card-2);color:var(--ink)}
+#q::placeholder{color:var(--ink-3)}
+#q:focus{outline:none;border-color:var(--brand);background:#22222D}
+.btn{border:1.5px solid var(--line);background:var(--card-2);border-radius:8px;
   padding:9px 13px;font-size:14px;font-weight:700;color:var(--ink-2);cursor:pointer;white-space:nowrap}
-.btn:hover{background:#f8fafc}
+.btn:hover{background:#262633;color:var(--ink)}
 .btn.on{border-color:var(--brand);background:var(--brand);color:#fff}
+.btn:disabled{opacity:.5;cursor:default}
 .cats{display:flex;gap:6px;overflow-x:auto;padding:11px 0 10px;
   -webkit-overflow-scrolling:touch;scrollbar-width:none}
 .cats::-webkit-scrollbar{display:none}
-.cat{flex:0 0 auto;border:1.5px solid var(--line);background:#fff;color:var(--ink-2);
-  border-radius:999px;padding:6px 14px;font-size:13.5px;font-weight:700;cursor:pointer;white-space:nowrap}
+.cat{flex:0 0 auto;border:1.5px solid var(--line);background:var(--card-2);color:var(--ink-2);
+  border-radius:6px;padding:6px 14px;font-size:13.5px;font-weight:700;cursor:pointer;
+  white-space:nowrap;letter-spacing:.02em}
+.cat:hover{color:var(--ink)}
 .cat.on{border-color:var(--brand);background:var(--brand);color:#fff}
 
 main{max-width:980px;margin:0 auto;padding:14px 16px 72px}
@@ -61,22 +68,23 @@ main{max-width:980px;margin:0 auto;padding:14px 16px 72px}
 .grp{background:var(--card);border:1px solid var(--line);border-radius:var(--r);
   margin-bottom:12px;overflow:hidden;box-shadow:var(--shadow)}
 .grp-top{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;
-  padding:12px 14px 10px;border-bottom:1px solid var(--line);background:#fbfcfe}
+  padding:12px 14px 10px;border-bottom:1px solid var(--line);background:var(--card-2);
+  border-left:3px solid var(--brand)}
 .grp-top .nm{font-size:16.5px;font-weight:800;overflow-wrap:anywhere}
-.grp-top .ct{font-size:11.5px;font-weight:700;color:var(--brand);
-  background:var(--brand-soft);border-radius:999px;padding:2px 9px}
+.grp-top .ct{font-size:11.5px;font-weight:700;color:#FF6B66;
+  background:var(--brand-soft);border:1px solid #4A1512;border-radius:4px;padding:1px 8px}
 .grp-top .n{margin-left:auto;font-size:12px;color:var(--ink-3);white-space:nowrap}
 .row{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:10px;
   padding:10px 14px;border-bottom:1px solid var(--line)}
 .row:last-child{border-bottom:0}
 .row .sp{font-size:14.5px;color:var(--ink);overflow-wrap:anywhere;min-width:0}
-.row .qt{font-size:17px;font-weight:800;font-variant-numeric:tabular-nums;
-  text-align:right;min-width:52px}
+.row .qt{font-size:18px;font-weight:800;font-variant-numeric:tabular-nums;
+  letter-spacing:.01em;text-align:right;min-width:54px}
 .row .qt i{display:block;font-style:normal;font-size:10.5px;font-weight:700;
   color:var(--ink-3);margin-top:-3px}
 .row .pr{font-size:14.5px;font-weight:700;font-variant-numeric:tabular-nums;
   color:var(--ink-2);text-align:right;min-width:64px}
-.row.zero{background:#fcfcfd}
+.row.zero{background:#14141B}
 .row.zero .sp{color:var(--ink-3)}
 .qt.has{color:var(--ok)}
 .qt.low{color:var(--warn)}
@@ -84,14 +92,17 @@ main{max-width:980px;margin:0 auto;padding:14px 16px 72px}
 
 /* ---------- 空狀態與訊息 ---------- */
 .empty{text-align:center;color:var(--ink-3);padding:48px 16px;font-size:15px}
+/* 細斜紋，像碳纖維，很淡不干擾閱讀 */
+body{background-image:repeating-linear-gradient(135deg,
+  rgba(255,255,255,.014) 0 2px, transparent 2px 6px)}
 .box{background:var(--card);border:1px solid var(--line);border-radius:var(--r);
   padding:18px;box-shadow:var(--shadow)}
-.box.warn{background:var(--warn-soft);border-color:#fcd34d}
-.box.bad{background:var(--bad-soft);border-color:#fecaca}
+.box.warn{background:#241B06;border-color:#5A4312}
+.box.bad{background:#2A0D0C;border-color:#5A1A18}
 .box h2{margin:0 0 8px;font-size:17px}
 .box p{margin:6px 0;font-size:14px;color:var(--ink-2);line-height:1.8}
-.box code{background:#f1f5f9;border-radius:5px;padding:1px 6px;font-size:13px;
-  overflow-wrap:anywhere}
+.box code{background:#0A0A0E;border:1px solid var(--line);border-radius:4px;
+  padding:1px 6px;font-size:13px;color:#FF8A85;overflow-wrap:anywhere}
 .box ol{margin:8px 0 0;padding-left:20px;font-size:14px;color:var(--ink-2);line-height:1.9}
 
 footer{max-width:980px;margin:0 auto;padding:0 16px 40px;
@@ -103,9 +114,15 @@ footer{max-width:980px;margin:0 auto;padding:0 16px 40px;
 <header>
   <div class="head-in">
     <div class="brand">
-      <span class="mark">📦</span>
-      <h1>永昇現貨表</h1>
-      <span class="sub">三重龍門 × 西門　·　總倉現貨與售價</span>
+      <span class="mark" aria-hidden="true">
+        <!-- 像素格紋旗：2px 一格，右半邊往下位移做出飄動感 -->
+        <svg viewBox="-1 0 20 20" width="27" height="27" shape-rendering="crispEdges">
+          <rect x="0" y="1" width="2" height="17" fill="#8A8A99"/>
+          <g fill="#F2F2F5"><rect x="3" y="2" width="2" height="2"/><rect x="3" y="6" width="2" height="2"/><rect x="3" y="10" width="2" height="2"/><rect x="5" y="4" width="2" height="2"/><rect x="5" y="8" width="2" height="2"/><rect x="5" y="12" width="2" height="2"/><rect x="7" y="2" width="2" height="2"/><rect x="7" y="6" width="2" height="2"/><rect x="7" y="10" width="2" height="2"/><rect x="9" y="4" width="2" height="2"/><rect x="9" y="8" width="2" height="2"/><rect x="9" y="12" width="2" height="2"/><rect x="11" y="3" width="2" height="2"/><rect x="11" y="7" width="2" height="2"/><rect x="11" y="11" width="2" height="2"/><rect x="13" y="5" width="2" height="2"/><rect x="13" y="9" width="2" height="2"/><rect x="13" y="13" width="2" height="2"/><rect x="15" y="3" width="2" height="2"/><rect x="15" y="7" width="2" height="2"/><rect x="15" y="11" width="2" height="2"/></g>
+        </svg>
+      </span>
+      <h1>全產品現貨表</h1>
+      <span class="sub">西門龍門　·　總倉現貨與售價</span>
     </div>
     <div class="toolbar">
       <input id="q" type="search" placeholder="搜尋產品名稱或規格…" autocomplete="off">
@@ -124,9 +141,9 @@ footer{max-width:980px;margin:0 auto;padding:0 16px 40px;
 <footer id="foot"></footer>
 
 <script>
-/* 永昇現貨表　—　唯讀現貨清單
+/* 全產品現貨表　—　唯讀現貨清單
    資料來源是一份發布出來的 CSV。設定方式見「經銷現貨表-設定說明.md」。 */
-const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSmni2gY5hGLXowE8wLoRbn2oHElG0JSQWsje7Tvg3hnfcNIjOdbzrpq5ezPMN2XHnJ4yG5xsg_UyS7/pub?gid=1132302481&single=true&output=csv';   // ← 把「發布到網路」給你的 CSV 網址貼在這兩個引號中間
+const CSV_URL = '';   // ← 把「發布到網路」給你的 CSV 網址貼在這兩個引號中間
 
 /** 低量的門檻：1～這個數字之間會標成橘色，提醒快沒了 */
 const LOW = 5;
