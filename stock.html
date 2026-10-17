@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>永昇現貨表</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f1f5f9; --card:#ffffff; --ink:#0f172a; --ink-2:#475569; --ink-3:#94a3b8;
+  --line:#e2e8f0; --brand:#1d4ed8; --brand-soft:#eef2ff;
+  --ok:#059669; --ok-soft:#ecfdf5; --warn:#d97706; --warn-soft:#fffbeb;
+  --bad:#dc2626; --bad-soft:#fef2f2;
+  --r:14px; --shadow:0 1px 2px rgba(15,23,42,.06),0 8px 24px -12px rgba(15,23,42,.12);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--ink);
+  font-family:"Noto Sans TC",-apple-system,"Segoe UI",system-ui,sans-serif;
+  font-size:15px; line-height:1.6; -webkit-text-size-adjust:100%;
+}
+button,input,select{font-family:inherit;font-size:inherit;color:inherit}
+.hidden{display:none!important}
+
+/* ---------- 頂部 ---------- */
+header{background:var(--card);border-bottom:1px solid var(--line);
+  position:sticky;top:0;z-index:20;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+.head-in{max-width:980px;margin:0 auto;padding:12px 16px 0}
+.brand{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.brand .mark{width:34px;height:34px;border-radius:9px;background:var(--brand);
+  color:#fff;display:grid;place-items:center;font-size:17px;flex:0 0 auto}
+.brand h1{margin:0;font-size:19px;font-weight:800;letter-spacing:-.01em}
+.brand .sub{font-size:12px;color:var(--ink-3);width:100%;margin-top:-2px}
+.toolbar{display:flex;gap:8px;align-items:center;margin:11px 0 0;flex-wrap:wrap}
+#q{flex:1 1 180px;min-width:0;border:1.5px solid var(--line);border-radius:10px;
+  padding:9px 12px;font-size:15px;background:#fff}
+#q:focus{outline:none;border-color:var(--brand)}
+.btn{border:1.5px solid var(--line);background:#fff;border-radius:10px;
+  padding:9px 13px;font-size:14px;font-weight:700;color:var(--ink-2);cursor:pointer;white-space:nowrap}
+.btn:hover{background:#f8fafc}
+.btn.on{border-color:var(--brand);background:var(--brand);color:#fff}
+.cats{display:flex;gap:6px;overflow-x:auto;padding:11px 0 10px;
+  -webkit-overflow-scrolling:touch;scrollbar-width:none}
+.cats::-webkit-scrollbar{display:none}
+.cat{flex:0 0 auto;border:1.5px solid var(--line);background:#fff;color:var(--ink-2);
+  border-radius:999px;padding:6px 14px;font-size:13.5px;font-weight:700;cursor:pointer;white-space:nowrap}
+.cat.on{border-color:var(--brand);background:var(--brand);color:#fff}
+
+main{max-width:980px;margin:0 auto;padding:14px 16px 72px}
+
+/* ---------- 狀態列 ---------- */
+.meta{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
+  font-size:12.5px;color:var(--ink-3);margin-bottom:12px}
+.meta b{color:var(--ink-2);font-variant-numeric:tabular-nums}
+
+/* ---------- 產品 ---------- */
+.grp{background:var(--card);border:1px solid var(--line);border-radius:var(--r);
+  margin-bottom:12px;overflow:hidden;box-shadow:var(--shadow)}
+.grp-top{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;
+  padding:12px 14px 10px;border-bottom:1px solid var(--line);background:#fbfcfe}
+.grp-top .nm{font-size:16.5px;font-weight:800;overflow-wrap:anywhere}
+.grp-top .ct{font-size:11.5px;font-weight:700;color:var(--brand);
+  background:var(--brand-soft);border-radius:999px;padding:2px 9px}
+.grp-top .n{margin-left:auto;font-size:12px;color:var(--ink-3);white-space:nowrap}
+.row{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:10px;
+  padding:10px 14px;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:0}
+.row .sp{font-size:14.5px;color:var(--ink);overflow-wrap:anywhere;min-width:0}
+.row .qt{font-size:17px;font-weight:800;font-variant-numeric:tabular-nums;
+  text-align:right;min-width:52px}
+.row .qt i{display:block;font-style:normal;font-size:10.5px;font-weight:700;
+  color:var(--ink-3);margin-top:-3px}
+.row .pr{font-size:14.5px;font-weight:700;font-variant-numeric:tabular-nums;
+  color:var(--ink-2);text-align:right;min-width:64px}
+.row.zero{background:#fcfcfd}
+.row.zero .sp{color:var(--ink-3)}
+.qt.has{color:var(--ok)}
+.qt.low{color:var(--warn)}
+.qt.out{color:var(--ink-3)}
+
+/* ---------- 空狀態與訊息 ---------- */
+.empty{text-align:center;color:var(--ink-3);padding:48px 16px;font-size:15px}
+.box{background:var(--card);border:1px solid var(--line);border-radius:var(--r);
+  padding:18px;box-shadow:var(--shadow)}
+.box.warn{background:var(--warn-soft);border-color:#fcd34d}
+.box.bad{background:var(--bad-soft);border-color:#fecaca}
+.box h2{margin:0 0 8px;font-size:17px}
+.box p{margin:6px 0;font-size:14px;color:var(--ink-2);line-height:1.8}
+.box code{background:#f1f5f9;border-radius:5px;padding:1px 6px;font-size:13px;
+  overflow-wrap:anywhere}
+.box ol{margin:8px 0 0;padding-left:20px;font-size:14px;color:var(--ink-2);line-height:1.9}
+
+footer{max-width:980px;margin:0 auto;padding:0 16px 40px;
+  font-size:12px;color:var(--ink-3);line-height:1.8}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="head-in">
+    <div class="brand">
+      <span class="mark">📦</span>
+      <h1>永昇現貨表</h1>
+      <span class="sub">三重龍門 × 西門　·　總倉現貨與售價</span>
+    </div>
+    <div class="toolbar">
+      <input id="q" type="search" placeholder="搜尋產品名稱或規格…" autocomplete="off">
+      <button class="btn" id="onlyHas">只看有貨</button>
+      <button class="btn" id="reload">↻ 更新</button>
+    </div>
+    <div class="cats" id="cats"></div>
+  </div>
+</header>
+
+<main>
+  <div class="meta" id="meta"></div>
+  <div id="list"></div>
+</main>
+
+<footer id="foot"></footer>
+
+<script>
+/* 永昇現貨表　—　唯讀現貨清單
+   資料來源是一份發布出來的 CSV。設定方式見「經銷現貨表-設定說明.md」。 */
+const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSmni2gY5hGLXowE8wLoRbn2oHElG0JSQWsje7Tvg3hnfcNIjOdbzrpq5ezPMN2XHnJ4yG5xsg_UyS7/pub?gid=1132302481&single=true&output=csv';   // ← 把「發布到網路」給你的 CSV 網址貼在這兩個引號中間
+
+/** 低量的門檻：1～這個數字之間會標成橘色，提醒快沒了 */
+const LOW = 5;
+
+/* ---------------------------------------------------------------- */
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
+  ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+const money = n => 'NT$' + Number(n || 0).toLocaleString('zh-TW');
+/** 比對用：忽略所有空白和大小寫（試算表上的空白常常不一致） */
+const norm = s => String(s ?? '').replace(/\s+/g, '').toLowerCase();
+
+const S = { rows: [], cats: [], cat: '全部', q: '', onlyHas: false, at: null };
+
+/* ---- CSV 解析 ----------------------------------------------------
+   自己寫一支，因為產品名稱裡可能有逗號或引號（例如「騎士TX系列 (油)」），
+   用 split(',') 會把那一列切壞。                                    */
+function parseCSV(text) {
+  const rows = [];
+  let row = [], val = '', i = 0, quoted = false;
+  text = String(text).replace(/^﻿/, '');          // 去掉 BOM
+  while (i < text.length) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { val += '"'; i += 2; continue; }
+        quoted = false; i++; continue;
+      }
+      val += c; i++; continue;
+    }
+    if (c === '"') { quoted = true; i++; continue; }
+    if (c === ',') { row.push(val); val = ''; i++; continue; }
+    if (c === '\r') { i++; continue; }
+    if (c === '\n') { row.push(val); rows.push(row); row = []; val = ''; i++; continue; }
+    val += c; i++;
+  }
+  if (val !== '' || row.length) { row.push(val); rows.push(row); }
+  return rows;
+}
+
+/** 依標題列認欄位，不要寫死 A B C D E——同事在試算表調換欄位順序也不會壞 */
+function readRows(csv) {
+  const grid = parseCSV(csv).filter(r => r.some(c => String(c).trim() !== ''));
+  if (!grid.length) return [];
+  const head = grid[0].map(norm);
+  const at = names => {
+    for (const n of names) { const i = head.indexOf(norm(n)); if (i >= 0) return i; }
+    return -1;
+  };
+  const iCat = at(['分類']), iName = at(['產品名稱', '品名']),
+        iSpec = at(['產品規格', '規格']), iQty = at(['總倉數量', '總倉', '數量']),
+        iPrice = at(['售價', '價格']);
+  if (iName < 0 || iQty < 0) return null;             // 表頭不對，當作沒設定好
+  return grid.slice(1).map(r => ({
+    cat: String(r[iCat] ?? '').trim() || '未分類',
+    name: String(r[iName] ?? '').trim(),
+    spec: String(r[iSpec] ?? '').trim(),
+    qty: Math.round(Number(String(r[iQty] ?? '').replace(/[^\d.-]/g, '')) || 0),
+    price: Math.round(Number(String(r[iPrice] ?? '').replace(/[^\d.-]/g, '')) || 0)
+  })).filter(x => x.name);
+}
+
+/* ---- 畫面 -------------------------------------------------------- */
+function renderCats() {
+  const all = ['全部'].concat(S.cats);
+  $('cats').innerHTML = all.map(c =>
+    `<button class="cat${c === S.cat ? ' on' : ''}" data-c="${esc(c)}">${esc(c)}</button>`).join('');
+  $('cats').querySelectorAll('.cat').forEach(b => b.onclick = () => {
+    S.cat = b.dataset.c; renderCats(); renderList();
+  });
+}
+
+function filtered() {
+  const q = norm(S.q);
+  return S.rows.filter(r => {
+    if (S.cat !== '全部' && r.cat !== S.cat) return false;
+    if (S.onlyHas && r.qty <= 0) return false;
+    if (!q) return true;
+    return norm(r.name).includes(q) || norm(r.spec).includes(q) || norm(r.cat).includes(q);
+  });
+}
+
+function renderList() {
+  const rows = filtered();
+  // 同一個產品名稱的規格收在一起，比較好找
+  const groups = [];
+  const seen = new Map();
+  rows.forEach(r => {
+    const k = r.cat + '\u0000' + r.name;
+    if (!seen.has(k)) { seen.set(k, { cat: r.cat, name: r.name, specs: [] }); groups.push(seen.get(k)); }
+    seen.get(k).specs.push(r);
+  });
+
+  const n = rows.length, has = rows.filter(r => r.qty > 0).length;
+  $('meta').innerHTML = S.at
+    ? `<span>資料時間 <b>${esc(S.at)}</b></span>
+       <span>共 <b>${groups.length}</b> 項產品　·　<b>${n}</b> 個規格　·　有貨 <b>${has}</b></span>`
+    : '';
+
+  if (!groups.length) {
+    $('list').innerHTML = `<div class="empty">${S.rows.length ? '找不到符合的產品' : '目前沒有資料'}</div>`;
+    return;
+  }
+  $('list').innerHTML = groups.map(g => `
+    <div class="grp">
+      <div class="grp-top">
+        <span class="ct">${esc(g.cat)}</span>
+        <span class="nm">${esc(g.name)}</span>
+        <span class="n">${g.specs.length} 個規格</span>
+      </div>
+      ${g.specs.map(s => {
+        const cls = s.qty <= 0 ? 'out' : s.qty <= LOW ? 'low' : 'has';
+        return `<div class="row${s.qty <= 0 ? ' zero' : ''}">
+          <span class="sp">${esc(s.spec || '（無規格）')}</span>
+          <span class="qt ${cls}">${s.qty}<i>${s.qty <= 0 ? '缺貨' : '總倉'}</i></span>
+          <span class="pr">${s.price ? money(s.price) : '—'}</span>
+        </div>`;
+      }).join('')}
+    </div>`).join('');
+}
+
+function setupHelp() {
+  $('list').innerHTML = `<div class="box warn">
+    <h2>⚙️ 還沒設定好</h2>
+    <p>這一頁要讀「經銷現貨表」那張分頁<b>發布到網路</b>之後的 CSV 網址，現在還是空的。</p>
+    <ol>
+      <li>在試算表建立 <code>經銷現貨表</code> 分頁（公式看設定說明）</li>
+      <li>檔案 → 共用 → <b>發布到網路</b> → 只選 <code>經銷現貨表</code> → 格式選 <b>逗號分隔值 (.csv)</b></li>
+      <li>把它給你的網址貼進 <code>stock.html</code> 最上面的 <code>CSV_URL</code></li>
+    </ol>
+    <p style="margin-top:10px">詳細步驟在 <code>經銷現貨表-設定說明.md</code>。</p>
+  </div>`;
+  $('meta').innerHTML = '';
+}
+
+function errBox(msg) {
+  $('list').innerHTML = `<div class="box bad">
+    <h2>讀不到資料</h2>
+    <p>${esc(msg)}</p>
+    <p>可能的原因：那張分頁的「發布到網路」被取消了、網址貼錯，或是網路不通。
+       請按上面的「↻ 更新」再試一次，還是不行就跟我們說一聲。</p>
+  </div>`;
+  $('meta').innerHTML = '';
+}
+
+async function load() {
+  if (!CSV_URL) return setupHelp();
+  const btn = $('reload');
+  btn.disabled = true; btn.textContent = '讀取中…';
+  try {
+    // 加一個時間戳記，避開瀏覽器和 Google 的快取，按更新才真的拿到新的
+    const url = CSV_URL + (CSV_URL.includes('?') ? '&' : '?') + '_=' + Date.now();
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) throw new Error('伺服器回應 ' + res.status);
+    const rows = readRows(await res.text());
+    if (rows === null) throw new Error('讀到的表頭不對，應該要有「產品名稱」和「總倉數量」這兩欄。');
+    S.rows = rows;
+    S.cats = [...new Set(rows.map(r => r.cat))];
+    if (!S.cats.includes(S.cat)) S.cat = '全部';
+    S.at = new Date().toLocaleString('zh-TW', { hour12: false }).replace(/:\d\d$/, '');
+    renderCats(); renderList();
+  } catch (e) {
+    errBox(e.message || String(e));
+  } finally {
+    btn.disabled = false; btn.textContent = '↻ 更新';
+  }
+}
+
+/* ---- 事件 -------------------------------------------------------- */
+let t = null;
+$('q').oninput = e => { S.q = e.target.value; clearTimeout(t); t = setTimeout(renderList, 120); };
+$('onlyHas').onclick = () => {
+  S.onlyHas = !S.onlyHas;
+  $('onlyHas').classList.toggle('on', S.onlyHas);
+  renderList();
+};
+$('reload').onclick = load;
+$('foot').textContent = '這份清單的數量是總倉現貨，會隨著出貨變動，實際以確認訂單為準。'
+  + '售價為建議售價，經銷價請與業務確認。';
+
+renderCats();
+load();
+// 停在這一頁太久數字會過期，每 5 分鐘自己重抓一次（分頁在背景時不抓）
+setInterval(() => { if (!document.hidden) load(); }, 5 * 60 * 1000);
+</script>
+</body>
+</html>
