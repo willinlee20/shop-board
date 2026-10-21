@@ -1817,10 +1817,12 @@ const stageOf = key => PICK_STAGES.find(s => s.key === key) || null;
 
 /** 網路應收待結：一張單一張卡，直接在這裡撿貨、改狀態 */
 function renderPickList(kind, name) {
-  // 撿貨用的排序：還沒寄的排最前面，再來是寄出待取，作廢／退貨沉到最底
-  const rank = r => !liveOrder(r) ? 3
-    : String(r['寄件狀態']) === SALES.SHIP[0] ? 0
-      : SALES.DONE_PICK.includes(String(r['取貨狀態'])) ? 2 : 1;
+  // 排序：已結帳＋已寄出＋已取件、只差會計按一下的排最前面（會計一進來就看到），
+  // 接著是還沒寄的、寄出待取的，作廢／退貨沉到最底
+  const rank = r => !liveOrder(r) ? 4
+    : (accReady(r) && !accDone(r)) ? 0
+      : String(r['寄件狀態']) === SALES.SHIP[0] ? 1
+        : SALES.DONE_PICK.includes(String(r['取貨狀態'])) ? 3 : 2;
   const all = unsettled(kind).slice().sort((a, b) =>
     rank(a) - rank(b) || String(a['訂單日期']).localeCompare(String(b['訂單日期'])));
 
@@ -2289,28 +2291,47 @@ function canSeePerf() {
 const NON_STAFF = ['公關品', '員購', '新客來店'];
 const isNonStaff = n => NON_STAFF.includes(String(n || '').trim());
 
-/** 這張單算不算業績 */
-const perfLive = r => String(r['狀態']) !== SALES.VOID;
+/** 這張單算不算業績：作廢、退貨入庫都不算 */
+const perfLive = r => String(r['狀態']) !== SALES.VOID && String(r['狀態']) !== SALES.RETURNED;
 /** 訂單日期的前七碼就是月份（資料都是 2026-09-18 這種格式） */
 const monthOf = r => String(r['訂單日期'] || '').slice(0, 7);
 
-/** 把來店單整理成 { 月份 → { 業務 → {rev, cost, n} } } */
+/** 業績分析的通道：全部＋四個分頁 */
+const PERF_KINDS = ['shop', 'online', 'mini', 'dist'];
+/**
+ * 這張單的業績金額。
+ * 來店單的「金額」已經是扣完折扣的銷貨金額；
+ * 其他三個分頁取「價格」，**運費不算業績**——成本欄裡沒有運費成本，
+ * 把運費算進去會讓毛利虛增（收 100 元運費看起來像多賺 100 元）。
+ */
+const perfRev = (kind, r) => Number(kind === 'shop' ? r['金額'] : r['價格']) || 0;
+
+const zero = () => ({ rev: 0, cost: 0, n: 0 });
+/** 把四個分頁整理成 { 月份 → { 業務 → {rev, cost, n, by:{shop,online,mini,dist}} } } */
 function perfData() {
   const out = new Map();
-  (SALE.rows.shop || []).filter(perfLive).forEach(r => {
-    const m = monthOf(r);
-    if (!/^\d{4}-\d{2}$/.test(m)) return;            // 日期沒填或格式怪的先跳過
-    const who = String(r['負責業務'] || '').trim() || '（未填）';
-    if (!out.has(m)) out.set(m, new Map());
-    const bag = out.get(m);
-    const e = bag.get(who) || { who, rev: 0, cost: 0, n: 0 };
-    e.rev += Number(r['金額']) || 0;
-    e.cost += Number(r['成本']) || 0;
-    e.n += 1;
-    bag.set(who, e);
+  PERF_KINDS.forEach(kind => {
+    (SALE.rows[kind] || []).filter(perfLive).forEach(r => {
+      const m = monthOf(r);
+      if (!/^\d{4}-\d{2}$/.test(m)) return;          // 日期沒填或格式怪的先跳過
+      const who = String(r['負責業務'] || '').trim() || '（未填）';
+      if (!out.has(m)) out.set(m, new Map());
+      const bag = out.get(m);
+      const e = bag.get(who)
+        || { who, ...zero(), by: Object.fromEntries(PERF_KINDS.map(k => [k, zero()])) };
+      const rev = perfRev(kind, r), cost = Number(r['成本']) || 0;
+      e.rev += rev; e.cost += cost; e.n += 1;
+      e.by[kind].rev += rev; e.by[kind].cost += cost; e.by[kind].n += 1;
+      bag.set(who, e);
+    });
   });
   return out;
 }
+
+/** 依選到的通道，把一筆資料換成要顯示的數字（'all' 就用合計） */
+const perfPick = (e, kind) => kind === 'all'
+  ? { who: e.who, rev: e.rev, cost: e.cost, n: e.n }
+  : { who: e.who, ...e.by[kind] };
 const perfMonths = data => [...data.keys()].sort().reverse();
 /** 名單上沒有的名字要標出來——通常是 Google 顯示名稱跑進來了（v4.4 以前的舊單） */
 const knownStaff = n => (SALE.lists.staff || []).some(x => String(x.name || '').trim() === n);
@@ -2343,10 +2364,12 @@ function perfRow(e, best) {
 
 function perfTable(list, best) {
   if (!list.length) return '';
-  return `<table class="pf-table">
+  // 包一層可橫向捲動的殼：四個通道加起來金額位數變多，手機上塞不下時
+  // 寧可讓表格自己捲，也不要把整頁撐寬
+  return `<div class="pf-scroll"><table class="pf-table">
     <thead><tr><th>業務</th><th class="pf-n">業績</th><th class="pf-n">毛利 / 率</th><th class="pf-n">客單數 / 價</th></tr></thead>
     <tbody>${list.map(e => perfRow(e, best)).join('')}</tbody>
-  </table>`;
+  </table></div>`;
 }
 
 function renderPerf() {
@@ -2356,12 +2379,17 @@ function renderPerf() {
   if (!host) return;
   const data = perfData(), months = perfMonths(data);
   if (!months.length) {
-    host.innerHTML = `<div class="empty">還沒有來店銷售資料</div>`;
+    host.innerHTML = `<div class="empty">還沒有銷售資料</div>`;
     return;
   }
   if (!SALE.perfMonth || !data.has(SALE.perfMonth)) SALE.perfMonth = months[0];
-  const m = SALE.perfMonth;
-  const all = [...data.get(m).values()];
+  if (!SALE.perfKind) SALE.perfKind = 'all';
+  const m = SALE.perfMonth, kind = SALE.perfKind;
+  const kLabel = kind === 'all' ? '全部通道' : SALES.LABEL[kind];
+
+  // 選了某個通道就只看那個通道的數字，那個通道沒單的人不列出來
+  const pickAll = list => list.map(e => perfPick(e, kind)).filter(e => e.n > 0);
+  const all = pickAll([...data.get(m).values()]);
   const staff = all.filter(e => !isNonStaff(e.who)).sort((a, b) => b.rev - a.rev);
   const other = all.filter(e => isNonStaff(e.who)).sort((a, b) => b.rev - a.rev);
   const tot = sumRows(staff);
@@ -2369,17 +2397,32 @@ function renderPerf() {
 
   // 上個月（照月份排序找前一個，不是硬算日曆，資料斷月也不會錯）
   const i = months.indexOf(m), prevM = months[i + 1] || null;
-  const prev = prevM ? sumRows([...data.get(prevM).values()].filter(e => !isNonStaff(e.who))) : null;
+  const prev = prevM
+    ? sumRows(pickAll([...data.get(prevM).values()]).filter(e => !isNonStaff(e.who))) : null;
   const gp = tot.rev - tot.cost;
+
+  /* 通道鈕上直接帶當月金額，不用一個一個點進去看。
+     這裡一律算「業務」的（不含公關品／員購／新客來店），
+     不然按鈕上的數字跟排行榜的合計會對不起來。 */
+  const monthRows = [...data.get(m).values()].filter(e => !isNonStaff(e.who));
+  const allTot = sumRows(monthRows);
+  const byKind = Object.fromEntries(PERF_KINDS.map(k =>
+    [k, sumRows(monthRows.map(e => e.by[k]))]));
+  const kindBar = `<div class="pf-kinds">
+    <button class="pf-k${kind === 'all' ? ' on' : ''}" data-pk="all">全部<i>${money(allTot.rev)}</i></button>
+    ${PERF_KINDS.map(k => `<button class="pf-k${kind === k ? ' on' : ''}${byKind[k].n ? '' : ' zero'}"
+        data-pk="${k}">${sEsc(SALES.LABEL[k])}<i>${byKind[k].n ? money(byKind[k].rev) : '—'}</i></button>`).join('')}
+  </div>`;
 
   host.innerHTML = `
     <div class="pf-head"><h2>業績分析</h2>
       <span class="pf-tag">🔒 只有幹部看得到</span></div>
     <div class="pf-months">${months.slice(0, 18).map(x =>
       `<button class="pf-m${x === m ? ' on' : ''}" data-pm="${sEsc(x)}">${sEsc(x.replace('-', ' / '))}</button>`).join('')}</div>
+    ${kindBar}
 
     <div class="pf-sum">
-      <div class="pf-big"><span class="lb">業績</span><b>${money(tot.rev)}</b>${perfDelta(tot, prev)}</div>
+      <div class="pf-big"><span class="lb">業績<i>${sEsc(kLabel)}</i></span><b>${money(tot.rev)}</b>${perfDelta(tot, prev)}</div>
       <div class="pf-grid">
         <div><span class="lb">毛利</span><b${gp < 0 ? ' class="neg"' : ''}>${pfMoney(gp)}</b><i>${pct(gp, tot.rev)}%</i></div>
         <div><span class="lb">客單數</span><b>${tot.n}</b><i>${staff.length} 位業務</i></div>
@@ -2388,8 +2431,14 @@ function renderPerf() {
       ${prevM ? `<div class="pf-prev">上個月（${sEsc(prevM)}）業績 ${money(prev.rev)}　·　毛利 ${pfMoney(prev.rev - prev.cost)}　·　${prev.n} 單</div>` : ''}
     </div>
 
-    <div class="sec-title">業務排行（依業績）</div>
-    ${perfTable(staff, best)}
+    ${kind === 'all' ? `<div class="pf-mix">${PERF_KINDS.filter(k => byKind[k].n).map(k => {
+      const x = byKind[k], g = x.rev - x.cost;
+      return `<div><span class="lb">${sEsc(SALES.LABEL[k])}</span><b>${money(x.rev)}</b>
+        <i>${pct(x.rev, allTot.rev)}%　毛利 ${pfMoney(g)}　${x.n} 單</i></div>`;
+    }).join('')}</div>` : ''}
+
+    <div class="sec-title">業務排行（依業績${kind === 'all' ? '' : '：' + sEsc(kLabel)}）</div>
+    ${staff.length ? perfTable(staff, best) : `<div class="empty">這個月沒有${sEsc(kLabel)}的單</div>`}
 
     ${other.length ? `<div class="sec-title">非業務（記帳分類，不列入排行）</div>
       ${perfTable(other, best)}
@@ -2403,15 +2452,30 @@ function renderPerf() {
 
     <div class="pf-note">
       <b>怎麼算的</b>
-      <p>只算<b>來店銷售單</b>（ShopSales店頭銷售），依<b>訂單日期</b>歸月份。
-      業績＝金額加總（已經扣掉折扣）；毛利＝業績 − 成本；客單數＝單數；客單價＝業績 ÷ 單數。<br>
-      <b>已作廢的單不算</b>。收起（封存）過的單<b>照算</b>——收起只是不想在紀錄頁看到，錢還是收了。
-      補登單、預訂單帶過來的單也都照算。</p>
+      <p><b>來店、網路、小賣、經銷四個分頁都算</b>，依<b>訂單日期</b>歸月份。
+      上面那排鈕可以只看其中一個通道，「全部」就是四個加起來。<br>
+      業績：來店取<b>金額</b>（已經扣掉折扣）；網路／小賣／經銷取<b>價格</b>，
+      <b>運費不算業績</b>——成本欄裡沒有運費成本，把運費算進去毛利會虛增。<br>
+      毛利＝業績 − 成本；客單數＝單數；客單價＝業績 ÷ 單數。<br>
+      <b>已作廢、已退貨入庫的單都不算</b>。收起（封存）過的單<b>照算</b>——收起只是不想在紀錄頁看到，
+      錢還是收了。補登單、預訂單帶過來的單也都照算。</p>
     </div>`;
 
   host.querySelectorAll('.pf-m').forEach(b => b.onclick = () => {
     SALE.perfMonth = b.dataset.pm;
     renderPerf();
+  });
+  host.querySelectorAll('.pf-k').forEach(b => b.onclick = () => {
+    SALE.perfKind = b.dataset.pk;
+    renderPerf();
+  });
+  // 表格真的塞不下才提示可以左右滑——塞得下就不要多一行廢話
+  host.querySelectorAll('.pf-scroll').forEach(d => {
+    if (d.scrollWidth <= d.clientWidth + 1) return;
+    const h = document.createElement('div');
+    h.className = 'pf-swipe';
+    h.textContent = '← 表格可以左右滑，右邊還有「客單數 / 價」';
+    d.insertAdjacentElement('afterend', h);
   });
 }
 

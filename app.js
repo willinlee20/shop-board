@@ -5,8 +5,8 @@
    ========================================================================= */
 
 /* ----------------------------- 版本 ------------------------------------ */
-const APP_VERSION = '4.8';          // 每次改版都會更新，畫面右上角看得到
-const APP_DATE = '2026-10-11';
+const APP_VERSION = '5.1';          // 每次改版都會更新，畫面右上角看得到
+const APP_DATE = '2026-10-21';
 
 /* ----------------------------- 設定區 -----------------------------------
    要改的東西都在這裡，下面的程式不用動。
@@ -632,6 +632,7 @@ function resolveRow(p) {
  * 把一張單的庫存計畫套用到庫存表：
  *   reserve  建立單子     來源 −N、預定專區 +N（總數不變）
  *   ship     客人取貨     預定專區 −N（總數 −N，真正出庫）
+ *   shipAt   客人取貨     目的地 −N（貨已經轉進門市了，從門市扣，總數 −N）
  *   transfer 備貨完成     預定專區 −N、目的地 +N（總數不變，只是換位置）
  *   restore  取消         預定專區 −N、目的地 +N（沒指定就退回原來源）
  * 寫入前會重新讀一次庫存，避免蓋掉別人剛改的數字。
@@ -653,6 +654,9 @@ async function applyPlan(plan, mode, dest) {
       add(row, CONFIG.H.reserve, +p.qty);
     } else if (mode === 'ship') {
       add(row, CONFIG.H.reserve, -p.qty);
+    } else if (mode === 'shipAt') {
+      // 貨已經被跟單備貨單轉進門市了，取貨完成要從**門市**扣，不是從預定專區
+      add(row, dest || src, -p.qty);
     } else if (mode === 'transfer' || mode === 'restore') {
       add(row, CONFIG.H.reserve, -p.qty);
       add(row, dest || src, +p.qty);
@@ -764,6 +768,7 @@ function planText(plan, mode, dest) {
     const src = srcLabel(p.src || DEFAULT_SRC());
     if (mode === 'reserve') return `・${name} ×${p.qty}　${src} −${p.qty} → 預定專區 +${p.qty}`;
     if (mode === 'ship') return `・${name} ×${p.qty}　預定專區 −${p.qty}（出庫，總數減少）`;
+    if (mode === 'shipAt') return `・${name} ×${p.qty}　${srcLabel(dest || p.src)} −${p.qty}（出庫，總數減少）`;
     if (mode === 'sell') return `・${name} ×${p.qty}　${src} −${p.qty}（出售，總數減少）`;
     if (mode === 'scrap') return `・${name} ×${p.qty}　${src} −${p.qty}（報廢，總數減少）`;
     if (mode === 'unscrap') return `・${name} ×${p.qty}　${src} +${p.qty}（報廢復原，加回去）`;
@@ -833,6 +838,68 @@ function parseJSON(s, fb) { try { return JSON.parse(s); } catch (e) { return fb;
 const noteOnlyStockup = r =>
   !!String(r['關聯單號'] || '').trim() && !normPlan(parseJSON(r['庫存異動JSON'], [])).length;
 
+/**
+ * 這張備貨單是不是「跟著某張預訂單開的」？是的話回傳那張預訂單。
+ * v4.9 起這種跟單會真的把貨從預定專區轉進門市，轉完預訂單就改成從門市扣，
+ * 所以這兩張單的庫存狀態必須一起動——不能各自為政。
+ * 小賣店取的補貨單關聯的是銷售分頁的單號，在留言板上找不到，所以回 null。
+ */
+function orderStockup(r) {
+  if (r['類型'] !== TYPES.STOCKUP) return null;
+  const link = String(r['關聯單號'] || '').trim();
+  if (!link) return null;
+  return (S.board || []).find(x => x.id === link && x['類型'] === TYPES.ORDER) || null;
+}
+/** 這張預訂單的貨已經被備貨單轉進門市了嗎？是的話取貨完成要從門市扣 */
+const atStoreAlready = r => r['類型'] === TYPES.ORDER && r['庫存狀態'] === STOCK.TRANSFERRED;
+
+/** 這張預訂單還沒處理完的跟單備貨單（還沒按備貨完成的那張） */
+const openCompanionOf = o => (S.board || []).find(x =>
+  x['類型'] === TYPES.STOCKUP && x['狀態'] === STATUS.OPEN
+  && String(x['關聯單號'] || '').trim() === o.id);
+
+/**
+ * 預訂單改了品項之後，把跟單備貨單的品項同步過去。
+ * 不同步的話，備貨單按「備貨完成」會搬舊的數量，兩張單就對不起來了。
+ * 總倉的品項全部被改掉時，這張備貨單就沒事做了，直接取消。
+ */
+/**
+ * 預訂單結束了（取貨完成或取消），把還開著的跟單備貨單一起收掉。
+ * 留著它最危險：貨已經出庫或退回去了，誰再按一次「備貨完成」就會憑空搬一批貨。
+ */
+async function closeCompanion(order, why) {
+  const cmp = openCompanionOf(order);
+  if (!cmp) return;
+  await updateBoardRow(cmp, {
+    狀態: STATUS.CANCEL, 完成時間: nowStr(), 完成者: userName(), 庫存狀態: STOCK.NA,
+    修改紀錄: (cmp['修改紀錄'] ? cmp['修改紀錄'] + '\n' : '')
+      + `${nowStr()} ${userName()}：預訂單 ${order.id} ${why}，這張備貨單自動收起（庫存未動）`
+  });
+}
+
+async function syncCompanion(order, newPlan) {
+  const cmp = openCompanionOf(order);
+  if (!cmp) return;
+  const wh = normPlan(newPlan).filter(p => (p.src || DEFAULT_SRC()) === CONFIG.H.warehouse);
+  if (!wh.length) {
+    await updateBoardRow(cmp, {
+      狀態: STATUS.CANCEL, 完成時間: nowStr(), 完成者: userName(),
+      修改紀錄: (cmp['修改紀錄'] ? cmp['修改紀錄'] + '\n' : '')
+        + `${nowStr()} ${userName()}：預訂單改成不從總倉出貨了，這張備貨單自動取消（庫存未動）`
+    });
+    return;
+  }
+  await updateBoardRow(cmp, {
+    品項明細: wh.map(p => `${p.name} ${p.spec} ×${p.qty}（總倉出）`).join('\n'),
+    品項JSON: JSON.stringify(wh.map(p =>
+      ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, price: 0, src: p.src }))),
+    庫存異動JSON: JSON.stringify(wh.map(p =>
+      ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, src: p.src }))),
+    修改紀錄: (cmp['修改紀錄'] ? cmp['修改紀錄'] + '\n' : '')
+      + `${nowStr()} ${userName()}：跟著預訂單 ${order.id} 的修改一起更新品項`
+  });
+}
+
 function cardHTML(r) {
   const t = r['類型'], done = r['狀態'] !== STATUS.OPEN;
   const tagCls = t === TYPES.ORDER ? 'tag-order' : t === TYPES.STOCKUP ? 'tag-stock'
@@ -884,6 +951,10 @@ function cardHTML(r) {
     } else if (noteOnly) {
       if (!done) body += `<div class="note">這張單<b>不會動庫存</b>——貨已經在預訂單送出時預留好了。
         送到門市後按「已送達」就好，客人取貨請到那張預訂單按「確認取貨完成」。</div>`;
+    } else if (!done && orderStockup(r)) {
+      body += `<div class="note">貨現在掛在「預定專區」。送到 ${esc(r['門市'])} 之後按「備貨完成」，
+        就會轉進 ${esc(r['門市'])} 的庫存（總數不變），之後客人取貨就從門市扣。
+        <b>品項要改請去改那張預訂單</b>，這裡改會對不起來。</div>`;
     } else if (!done && r['庫存狀態'] === STOCK.RESERVED) {
       body += `<div class="note">貨已經從來源移到「預定專區」等著送出。實際送到門市後按「備貨完成」，就會轉進 ${esc(r['門市'])} 的庫存（總數不變）。</div>`;
     }
@@ -1027,6 +1098,10 @@ document.addEventListener('click', async e => {
 
   if (act === 'ship') {
     const plan = parseJSON(r['庫存異動JSON'], []);
+    // 貨已經被跟單備貨單轉進門市的話，要從門市扣，不能再去扣預定專區（那裡已經空了）
+    const atStore = atStoreAlready(r);
+    const shipMode = atStore ? 'shipAt' : 'ship';
+    const shipDest = atStore ? storeCol(r['門市']) : null;
     /* 業務是誰：照 email 去查業務同仁名單。查得到就直接用，
        查不到（舊單沒記 email、或名單裡沒這個人）就跳一排名字讓人選——
        以前這裡會把 Google 帳號的顯示名稱（Mini Hsu）直接寫進試算表。 */
@@ -1045,8 +1120,10 @@ document.addEventListener('click', async e => {
                 ? `<p style="font-size:13.5px;color:var(--ink-3)">業務會記 <b>${esc(known)}</b>（這張單就是你開的）。</p>`
                 : `<div class="alert-box">業務會記 <b>${esc(known || r['建立者'] || '（未填）')}</b>（當初開單的人），<b>不是你</b>。
                     你按確認只是幫忙出貨，系統會另外記下出貨的人是 ${esc(userName())}。</div>`}
-              <p style="color:var(--ink-2);font-size:14px">按下確定後會從庫存的「預定專區」扣掉，總數才會真正減少：</p>
-              <pre class="pre">${esc(planText(plan, 'ship'))}</pre>
+              <p style="color:var(--ink-2);font-size:14px">${atStore
+                ? `這批貨之前已經由備貨單轉進 <b>${esc(r['門市'])}</b>，所以會從<b>門市</b>扣掉，總數才會真正減少：`
+                : '按下確定後會從庫存的「預定專區」扣掉，總數才會真正減少：'}</p>
+              <pre class="pre">${esc(planText(plan, shipMode, shipDest))}</pre>
               ${needPick
                 ? `<div class="warn-box">這張單的開單者是 <b>${esc(r['建立者'] || '（未填）')}</b>，
                      <b>在業務同仁名單裡找不到對應的人</b>（舊單沒記 email，或名單還沒加這個人）。<br>
@@ -1058,8 +1135,10 @@ document.addEventListener('click', async e => {
     if (!res) return;
     const staff = needPick ? res.staff : known;
     await doAction(b, async () => {
-      await applyPlan(plan, 'ship');
+      await applyPlan(plan, shipMode, shipDest);
       await updateBoardRow(r, { 狀態: STATUS.DONE, 完成時間: nowStr(), 完成者: userName(), 庫存狀態: STOCK.SHIPPED });
+      // 貨已經出去了，還開著的跟單備貨單要收掉，不然有人再按一次會憑空搬貨
+      try { await closeCompanion(r, '已取貨完成'); } catch (err) { console.warn('收起跟單備貨單失敗', err); }
       let extra = '';
       if (window.createShopSaleFromOrder) {
         try { await window.createShopSaleFromOrder(r, staff); extra = '，並開了一張來店銷售單'; }
@@ -1071,7 +1150,12 @@ document.addEventListener('click', async e => {
 
   if (act === 'cancel') {
     const plan = normPlan(parseJSON(r['庫存異動JSON'], []));
-    const reserved = r['庫存狀態'] === STOCK.RESERVED;
+    const companion = orderStockup(r);        // 跟著預訂單開的備貨單
+    const atStore = atStoreAlready(r);        // 預訂單的貨已經轉進門市了
+    /* 這兩種情況取消時「不能動庫存」：
+       · 跟單備貨單：貨是那張預訂單預留的，這裡退回去會把預訂單的貨洗掉
+       · 已轉進門市的預訂單：貨就在門市架上，取消等於變回一般庫存，不用再搬 */
+    const reserved = r['庫存狀態'] === STOCK.RESERVED && !companion;
     const isStock = r['類型'] === TYPES.STOCKUP;
     const isScrap = r['類型'] === TYPES.SCRAP;
     const isBuy = r['類型'] === TYPES.PURCHASE;
@@ -1085,6 +1169,14 @@ document.addEventListener('click', async e => {
                 : '客戶：<b>' + esc(r['客戶名稱'] || '（無）') + '</b>'}</p>` +
         (reserved
           ? `<p style="color:var(--ink-2);font-size:14px">預定專區的貨要退回哪裡？（預設退回原來源：${esc(backHome)}）</p>`
+          : companion
+          ? `<div class="alert-box">這張是配合預訂單 <b>${esc(companion['客戶名稱'] || companion.id)}</b> 開的備貨單。
+               貨是<b>那張預訂單</b>預留在「預定專區」的，取消這張<b>不會動到庫存</b>。<br>
+               如果整筆訂單都不要了，請去取消<b>那張預訂單</b>，貨才會退回去。</div>`
+          : atStore
+          ? `<div class="alert-box">這張單的貨<b>已經由備貨單轉進 ${esc(r['門市'])}</b> 了。
+               取消不會動庫存——那批貨就留在 ${esc(r['門市'])}，變成門市的一般庫存可以賣。<br>
+               如果要把貨送回總倉，請另外開一張備貨單處理。</div>`
           : `<p style="color:var(--ink-2);font-size:14px">這張單的庫存還沒扣，取消不會動到庫存。</p>`),
       choices: reserved ? {
         name: 'dest',
@@ -1103,8 +1195,16 @@ document.addEventListener('click', async e => {
         // 本來就沒扣成功的單（庫存狀態＝未扣）不要假裝「已還原」，維持原樣才看得出真相
         庫存狀態: reserved ? STOCK.RESTORED : (r['庫存狀態'] || STOCK.NA),
         修改紀錄: (r['修改紀錄'] ? r['修改紀錄'] + '\n' : '')
-          + `${nowStr()} ${userName()}：取消${isBuy ? '進貨需求' : isScrap ? '報廢' : isStock ? '備貨' : '預訂'}${reserved ? `，庫存退回 ${res.dest ? srcLabel(res.dest) : backHome}` : '（庫存未動）'}`
+          + `${nowStr()} ${userName()}：取消${isBuy ? '進貨需求' : isScrap ? '報廢' : isStock ? '備貨' : '預訂'}`
+          + (reserved ? `，庫存退回 ${res.dest ? srcLabel(res.dest) : backHome}`
+            : companion ? `（庫存未動，貨由預訂單 ${companion.id} 持有）`
+            : atStore ? `（庫存未動，貨留在 ${r['門市']} 成為一般庫存）`
+            : '（庫存未動）')
       });
+      // 預訂單取消了 → 還開著的跟單備貨單要一起收掉，不然它還會想搬一批不存在的貨
+      if (r['類型'] === TYPES.ORDER) {
+        try { await closeCompanion(r, '已取消'); } catch (err) { console.warn('收起跟單備貨單失敗', err); }
+      }
       toast(reserved ? '已取消，庫存已退回 ' + (res.dest ? srcLabel(res.dest) : backHome) : '已取消（庫存未動）', 'ok');
     });
   }
@@ -1113,13 +1213,23 @@ document.addEventListener('click', async e => {
   if (act === 'transfer') {
     const plan = normPlan(parseJSON(r['庫存異動JSON'], []));
     const dest = storeCol(r['門市']);
-    const linked = noteOnlyStockup(r);            // 跟著預訂單開的送貨提醒單：不動庫存
+    const linked = noteOnlyStockup(r);            // v4.8 以前的跟單：沒記庫存，不動庫存
+    const ord = linked ? null : orderStockup(r);  // v4.9 起的跟單：真的把貨轉進門市
     const ok = await confirmModal({
-      title: linked ? '貨已經送到門市了？' : '備貨已經送到門市了？',
+      title: linked || ord ? '貨已經送到門市了？' : '備貨已經送到門市了？',
       lines: linked
         ? `<p>去向：<b>${esc(r['門市'])}</b>　（配合預訂單 ${esc(r['關聯單號'])}）</p>
-           <p style="color:var(--ink-2);font-size:14px">這張是送貨提醒單，<b>不會動到庫存</b>。
+           <p style="color:var(--ink-2);font-size:14px">這張是舊版的送貨提醒單，<b>不會動到庫存</b>。
            貨還是留在「預定專區」，等客人來取貨時，請到那張預訂單按「確認取貨完成」。</p>`
+        : ord
+        ? `<p>去向：<b>${esc(r['門市'])}</b>　（配合預訂單 ${esc(ord['客戶名稱'] || ord.id)}）</p>
+           <p style="color:var(--ink-2);font-size:14px">按下確定後，這批貨會從「預定專區」<b>轉進 ${esc(r['門市'])} 的庫存</b>
+           （總數不變，只是換位置），門市的數字就會跟架上的貨對起來：</p>
+           <pre class="pre">${esc(planText(plan, 'transfer', dest))}</pre>
+           <div class="alert-box">轉進門市之後，那張預訂單的「確認取貨完成」會改成<b>從 ${esc(r['門市'])} 扣</b>，
+             不再從預定專區扣。<br>
+             要注意的是：這批貨會變成 ${esc(r['門市'])} 的<b>一般庫存</b>，架上有人要買同一支的話，
+             請先確認不是客人訂的那幾盒。</div>`
         : `<p>去向：<b>${esc(r['門市'])}</b></p>
            ${!plan.length && r['庫存狀態'] === STOCK.RESERVED
              ? `<div class="warn-box">⚠ 這張單標著「已預留」，但<b>沒有記錄當初扣了哪些貨</b>（庫存異動JSON 是空的）。<br>
@@ -1137,6 +1247,15 @@ document.addEventListener('click', async e => {
         狀態: STATUS.DONE, 完成時間: nowStr(), 完成者: userName(),
         庫存狀態: linked ? STOCK.NA : STOCK.TRANSFERRED
       });
+      // 跟單把貨轉進門市了 → 預訂單也要改成「已轉入門市」，
+      // 不然客人取貨時會再去扣預定專區（那裡已經空了），數字就會變成負的
+      if (ord) {
+        await updateBoardRow(ord, {
+          庫存狀態: STOCK.TRANSFERRED,
+          修改紀錄: (ord['修改紀錄'] ? ord['修改紀錄'] + '\n' : '')
+            + `${nowStr()} ${userName()}：備貨單 ${r.id} 已把貨從預定專區轉進 ${r['門市']}，取貨完成改從 ${r['門市']} 扣`
+        });
+      }
       toast(linked ? '已標記送達 ' + r['門市'] : '備貨完成，已轉入 ' + r['門市'], 'ok');
     });
   }
@@ -2032,11 +2151,36 @@ async function submitForm() {
       const fromWh = isStock ? [] : plan.filter(p => p.src === CONFIG.H.warehouse);
       const whHTML = fromWh.length ? `<div class="alert-box">🚚 <b>從總倉調度，請協助備貨</b><br>
         以下品項在總倉，不在 ${esc(FORM.store)}，客人取貨前要有人先把貨送過去：<br>
-        ${fromWh.map(p => `・${esc(p.name)} ${esc(p.spec)} ×${p.qty}`).join('<br>')}</div>` : '';
+        ${fromWh.map(p => `・${esc(p.name)} ${esc(p.spec)} ×${p.qty}`).join('<br>')}
+        <span style="display:block;margin-top:6px">開備貨單的話：貨送到 ${esc(FORM.store)} 後按「備貨完成」，
+        系統會把貨從「預定專區」<b>轉進 ${esc(FORM.store)}</b>，門市數字就跟架上對得起來，客人取貨時從門市扣。<br>
+        選「我自己去總倉拿」的話，<b>請不要再手動開一張備貨單</b>——那會把總倉扣第二次。</span></div>` : '';
+
+      /* 手動開備貨單時的防呆：如果同一間門市已經有預訂單把同一支貨從總倉預留走了，
+         很可能是有人在預訂單那邊選了「我自己去總倉拿」又跑來開這張單。
+         兩張單都會扣總倉 → 總倉被扣兩次、總數短少。 */
+      const dupHTML = (() => {
+        if (!isStock) return '';
+        const key = p => normName(p.name) + '\u0000' + normName(p.spec);
+        const keys = new Set(plan.filter(p => (p.src || DEFAULT_SRC()) === CONFIG.H.warehouse).map(key));
+        if (!keys.size) return '';
+        const hits = (S.board || []).filter(o => o['類型'] === TYPES.ORDER
+          && o['狀態'] === STATUS.OPEN && o['庫存狀態'] === STOCK.RESERVED
+          && o['門市'] === FORM.store
+          && normPlan(parseJSON(o['庫存異動JSON'], [])).some(p =>
+            (p.src || DEFAULT_SRC()) === CONFIG.H.warehouse && keys.has(key(p))));
+        if (!hits.length) return '';
+        return `<div class="warn-box">⚠ <b>這些貨可能已經被預訂單預留走了</b><br>
+          ${esc(FORM.store)} 還有 ${hits.length} 張預訂單，已經把同一支貨從<b>總倉</b>預留到「預定專區」：<br>
+          ${hits.slice(0, 5).map(o => `・${esc(o['客戶名稱'] || o.id)}（${esc(o.id)}）`).join('<br>')}
+          ${hits.length > 5 ? '<br>…還有 ' + (hits.length - 5) + ' 張' : ''}<br>
+          如果你是為了那幾張單才開這張備貨單，<b>請按取消</b>——
+          那張預訂單自己的備貨單就夠了，再開一張會把<b>總倉扣第二次</b>。</div>`;
+      })();
 
       const res = await confirmModal({
         title: isStock ? '確認這張備貨單' : '確認這張預訂單',
-        lines: `${whHTML}
+        lines: `${whHTML}${dupHTML}
                 <p style="color:var(--ink-2);font-size:14px">送出後庫存會這樣動（總數不變，貨先移到「預定專區」）：</p>
                 <pre class="pre">${esc(planText(plan, 'reserve'))}</pre>
                 <p style="color:var(--ink-2);font-size:14px">${isStock
@@ -2131,9 +2275,27 @@ async function submitForm() {
   if (!oldPlan.length && r['庫存狀態'] === STOCK.RESERVED) {
     oldPlan = parseJSON(r['品項JSON'], []);
   }
+  /* 貨已經轉進門市的單，不能用「預定專區」那套差額邏輯去改品項——
+     applyDelta 會去加減預定專區，但貨早就不在那裡了，一改數字就全錯。
+     所以品項／門市鎖住，其他欄位（備註、取貨日期、收款方式…）照樣可以改。 */
+  /* 跟單備貨單的品項是跟著預訂單走的，單獨改這裡會讓兩張單對不起來
+     （貨的量是預訂單預留的，這張單一改就會重複加減預定專區）。 */
+  const cmp = orderStockup(r);
+  if (itemsChanged && cmp) {
+    alert('這張備貨單是配合預訂單「' + (cmp['客戶名稱'] || cmp.id) + '」開的，品項要跟那張單一致。\n\n'
+      + '要改品項請去改**那張預訂單**，這張單的備註、備貨日期還是可以改。');
+    return;
+  }
+  if (itemsChanged && atStoreAlready(r)) {
+    alert('這張單的貨已經由備貨單轉進 ' + r['門市'] + ' 了，沒辦法直接改品項或門市。\n\n'
+      + '要改的話請先取消這張單（貨會留在 ' + r['門市'] + ' 當一般庫存），再重新開一張。\n'
+      + '備註、取貨日期、收款方式這些還是可以改。');
+    return;
+  }
   // 貨還在「預定專區」等著的單才需要動庫存；已出庫、已還原、不適用的都不動。
   const holding = r['庫存狀態'] !== STOCK.SHIPPED
                 && r['庫存狀態'] !== STOCK.RESTORED
+                && r['庫存狀態'] !== STOCK.TRANSFERRED
                 && r['庫存狀態'] !== STOCK.NA;
   const rework = !!(plan && itemsChanged && holding && t !== TYPES.PURCHASE);
   const delta = rework ? planDelta(oldPlan, plan) : { more: [], less: [] };
@@ -2160,6 +2322,11 @@ async function submitForm() {
     patch['修改紀錄'] = (r['修改紀錄'] ? r['修改紀錄'] + '\n' : '')
       + `${nowStr()} ${userName()}：${changes.join('；')}`;
     await updateBoardRow(r, patch);
+    // 預訂單改了品項 → 跟單備貨單要跟著改，不然它會搬錯數量
+    if (rework && r['類型'] === TYPES.ORDER) {
+      try { await syncCompanion(r, plan); }
+      catch (err) { console.warn('同步跟單備貨單失敗', err); }
+    }
     closeForm();
     await refreshAll('已儲存修改');
   } catch (err) {
@@ -2231,11 +2398,15 @@ async function createCompanionStockup(orderId, whItems) {
   values[C['品項明細']] = whItems.map(p => `${p.name} ${p.spec} ×${p.qty}（總倉出）`).join('\n');
   values[C['品項JSON']] = JSON.stringify(whItems.map(p =>
     ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, price: 0, src: p.src })));
-  values[C['庫存異動JSON']] = '[]';            // 空的 → 完成或取消時都不會動庫存
-  values[C['庫存狀態']] = STOCK.NA;
+  // 記下要搬哪些貨。貨是預訂單剛剛預留到「預定專區」的那一批，這張單不會再扣一次，
+  // 按「備貨完成」時才把它從預定專區轉進門市（總數不變，只是換位置）。
+  values[C['庫存異動JSON']] = JSON.stringify(whItems.map(p =>
+    ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, src: p.src })));
+  values[C['庫存狀態']] = STOCK.RESERVED;
   values[C['關聯單號']] = orderId;
   values[C['備註']] = `配合預訂單「${(FORM.cName || '').trim()}」（${orderId}）從總倉調度到 ${FORM.store}。`
-    + `貨已由預訂單預留在「預定專區」，這張單只是提醒送貨，不會再動庫存。`;
+    + `貨已由預訂單預留在「預定專區」，這張單不會再扣一次。`
+    + `貨送到門市後按「備貨完成」，會從「預定專區」轉進 ${FORM.store}，客人取貨時就從 ${FORM.store} 扣。`;
   await appendRow(S.boardTitle, values);
 }
 
