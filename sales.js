@@ -30,6 +30,10 @@ const SALES = {
   COLLECT_PAID: '已收貨款',              // 選這個 → 結帳狀態直接帶「已結帳」
   COLLECT_COD:  '貨到付款',              // 網路單的預設（大部分是貨到付款）
   VOID: '已作廢',
+  /* 退貨折讓：跟來店單寫在同一張分頁，金額記負的，
+     業績、毛利、日結、今日銷售就會自動跟著減，不用每個報表各改一次。
+     「單據性質」欄空白＝一般銷售單，填這個值＝退貨折讓。 */
+  RET_TYPE: '退貨折讓',
   PAYWAY: ['現金', '匯款'],          // 來店單的收款方式，出納對帳用
   CLOSE_SHEET: 'DayClose日結',       // 每間門市每天「本日營業結束」的紀錄
   // 網路單：這兩種情況不扣庫存（貨不是從我們倉庫出的）
@@ -62,7 +66,8 @@ const SALES = {
 const SH_HEAD = {
   shop: ['id', '訂單日期', '建立時間', '建立者', '門市', '負責業務', '品項明細', '金額', '成本',
          '備註', '品項JSON', '庫存異動JSON', '庫存狀態', '關聯單號', '狀態',
-         '最後修改時間', '最後修改者', '修改紀錄', '封存', '收款方式', '折扣', '未折金額'],
+         '最後修改時間', '最後修改者', '修改紀錄', '封存', '收款方式', '折扣', '未折金額',
+         '單據性質', '客戶名稱'],
   online: ['id', '訂單日期', '建立時間', '建立者', '客戶名稱', '電話', '訂單內容', '價格', '運費', '成本',
            '收款方式', '寄送方式', '店名',
            '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '備註',
@@ -462,6 +467,10 @@ function renderNewPicker() {
           <span class="ico">${{ shop: '🏬', online: '🌐', mini: '🛍️', dist: '🏪' }[k]}</span>${SALES.LABEL[k]}
           <span class="sub">${{ shop: '客人在店裡買', online: '網路訂單，總倉出', mini: '小賣訂貨', dist: '經銷商訂貨' }[k]}</span>
         </button>`).join('')}
+      <button class="pos-btn ret" data-newsale="ret">
+        <span class="ico">↩</span>${SALES.RET_TYPE}
+        <span class="sub">退錢給客人，貨收回來</span>
+      </button>
     </div>`;
 }
 
@@ -475,10 +484,16 @@ function newSpecGroup() { return { cat: S.lastCat || null, name: '', qty: {}, pr
 
 function openSaleForm(kind) {
   const store0 = CONFIG.STORES[0].label;
+  /* 退貨折讓借用來店單的表單和分頁，只是金額記負的、庫存往回加。
+     ret=true 是整張表單的開關，kind 還是 shop。 */
+  const ret = kind === 'ret';
+  if (ret) kind = 'shop';
   SALE.form = {
     // 來店單：這間店按過「本日營業結束」的話，日期直接跳到下一個營業日
-    kind, date: kind === 'shop' ? openDay(store0) : todayStr(), staff: defaultStaff(),
+    kind, ret, date: kind === 'shop' ? openDay(store0) : todayStr(), staff: defaultStaff(),
     store: store0,
+    retStock: true,                    // 貨有退回來（取消勾選＝純折讓，只退錢）
+    rsrc: {},                          // 每個品項退回哪裡：{ 庫存表列號: 欄位名稱 }
     groups: [newSpecGroup()],
     cName: '', tel: '', note: '', noteTags: [], fee: '', bonus: '', discount: '', payStatus: SALES.PAY[0], payDate: '',
     miniCollect: SALES.MINI_COLLECT[0],
@@ -495,12 +510,12 @@ function openSaleForm(kind) {
   applyDistDefaults();
   const host = $('modalHost');
   host.innerHTML = `<div class="modal"><div class="sheet sale-form">
-      <div class="sheet-head"><h2>新增${SALES.LABEL[kind]}銷售單</h2>
+      <div class="sheet-head"><h2>${ret ? '新增' + SALES.RET_TYPE + '單' : '新增' + SALES.LABEL[kind] + '銷售單'}</h2>
         <button class="btn btn-ghost" id="closeSale">✕</button></div>
       <div class="sheet-body" id="saleBody"></div>
       <div class="sheet-foot">
         <button class="btn" id="cancelSale">取消</button>
-        <button class="btn btn-primary" id="submitSale">送出銷售單</button>
+        <button class="btn btn-primary" id="submitSale">${ret ? '送出退貨折讓單' : '送出銷售單'}</button>
       </div></div></div>`;
   $('closeSale').onclick = $('cancelSale').onclick = () => { host.innerHTML = ''; SALE.form = null; };
   $('submitSale').onclick = submitSale;
@@ -570,7 +585,38 @@ function pickupOptions() {
   const f = SALE.form;
   return f && f.selfPick ? SALES.PICKUP.filter(p => p !== '寄送') : SALES.PICKUP;
 }
+/** 這張單是不是退貨折讓（表單用） */
+const isRet = () => !!(SALE.form && SALE.form.ret);
+/** 這筆退貨的貨要加回哪一欄；沒選過就預設開單的那間門市 */
+const retSrcOf = row => (SALE.form.rsrc || {})[row] || storeCol(SALE.form.store);
+
+/** 退貨折讓：每個品項各自選要加回哪裡（門市或總倉） */
+function retSrcBlock() {
+  const f = SALE.form;
+  if (!f.ret) return '';
+  if (!f.retStock) {
+    return `<div class="field"><div class="opt-warn">🚫 <b>純折讓，不加庫存</b>——
+      只把錢退給客人，貨沒有收回來，庫存和成本都不會動。</div></div>`;
+  }
+  const items = saleItemList();
+  if (!items.length) return '';
+  return `<div class="field"><label>退回來的貨放哪裡 <span class="req">*</span></label>
+    <div class="ret-src" id="retSrcList">
+      ${items.map(i => `<div class="ret-src-row">
+        <span class="nm">${sEsc(i.name)}${i.spec ? '　' + sEsc(i.spec) : ''}<i>×${i.qty}</i></span>
+        <select data-rsrc="${i.row}">${srcOptions().map(o =>
+          `<option value="${sEsc(o.col)}"${o.col === retSrcOf(i.row) ? ' selected' : ''}>${sEsc(o.label)}</option>`).join('')}</select>
+      </div>`).join('')}
+    </div>
+    <div class="hint-row">預設加回<b>${sEsc(f.store)}</b>。貨要送回總倉檢查的話就改成總倉。</div></div>`;
+}
+
 function srcNote() {
+  if (isRet()) {
+    return SALE.form.retStock
+      ? `<div class="hint-row">退回來的貨會<b>加回庫存</b>（總數增加），每個品項可以各自選放哪裡</div>`
+      : `<div class="hint-row backfill">🚫 <b>純折讓</b>　只退錢，庫存和成本都不動</div>`;
+  }
   if (isBackfill()) {
     return `<div class="hint-row backfill">📝 <b>紀錄補登，不扣庫存</b>　
       這張單只補業績和金額，庫存完全不動（貨已經出去了）</div>`;
@@ -613,8 +659,8 @@ function renderSaleBody() {
   const dateField = `<div class="field"><label>訂單日期 <span class="req">*</span></label>
       <input type="date" id="fDate2" value="${f.date}"></div>`;
   const noteField = `<div class="field"><label>備註</label>
-      ${noteTagsField('noteTags', f.noteTags, CAN_BACKFILL(f.kind) ? NOTE_TAGS : BASIC_TAGS)}
-      <textarea id="fNote2" placeholder="特殊狀況、客人交代的事">${sEsc(f.note)}</textarea></div>`;
+      ${f.ret ? '' : noteTagsField('noteTags', f.noteTags, CAN_BACKFILL(f.kind) ? NOTE_TAGS : BASIC_TAGS)}
+      <textarea id="fNote2" placeholder="${f.ret ? '退貨原因、原本那張單的單號' : '特殊狀況、客人交代的事'}">${sEsc(f.note)}</textarea></div>`;
   const payFields = `
     <div class="field"><label>結帳狀態 <span class="req">*</span></label>
       <div class="chips big-chips" id="payChips">
@@ -639,7 +685,26 @@ function renderSaleBody() {
 
   let html = dateField;
 
-  if (f.kind === 'shop') {
+  if (f.kind === 'shop' && f.ret) {
+    html = `<div class="alert-box">↩ <b>${SALES.RET_TYPE}</b>
+        金額會記成<b>負的</b>，從當月業績、毛利、當日營業額扣掉。
+        <span style="display:block;font-weight:400;font-size:13px;margin-top:4px">
+        客戶名稱可以不填，有需要再寫。</span></div>` + dateField
+      + `<div class="field"><label>門市 <span class="req">*</span></label>
+        <div class="chips big-chips" id="storeChips2">
+          ${CONFIG.STORES.map(s => `<button class="chip${s.label === f.store ? ' on' : ''}" data-store="${s.label}">${s.label}</button>`).join('')}
+        </div><div class="hint-row">客人在哪一間退的，這筆就算在那間店的帳上</div></div>`
+      + staffField
+      + `<div class="field"><label>客戶名稱（可不填）</label>
+          <input type="text" id="fCName" value="${sEsc(f.cName)}" placeholder="要記的話寫這裡，不填也可以送出"></div>`
+      + itemsBlock()
+      + `<div class="field"><label>貨有沒有退回來 <span class="req">*</span></label>
+          <label class="check-inline${f.retStock ? ' on' : ''}">
+            <input type="checkbox" id="fRetStock" ${f.retStock ? 'checked' : ''}>貨有退回來，要加回庫存</label>
+          ${srcNote()}</div>`
+      + retSrcBlock()
+      + payWayField() + noteField;
+  } else if (f.kind === 'shop') {
     html += `<div class="field"><label>門市 <span class="req">*</span></label>
         <div class="chips big-chips" id="storeChips2">
           ${CONFIG.STORES.map(s => `<button class="chip${s.label === f.store ? ' on' : ''}" data-store="${s.label}">${s.label}</button>`).join('')}
@@ -733,7 +798,7 @@ function renderSaleBody() {
 /** 來店單的收款方式：出納要用這個對帳，所以放在金額合計正下方 */
 function payWayField() {
   const f = SALE.form;
-  return `<div class="field"><label>收款方式 <span class="req">*</span></label>
+  return `<div class="field"><label>${f.ret ? '退款方式' : '收款方式'} <span class="req">*</span></label>
     <div class="chips big-chips" id="payWayChips">
       ${SALES.PAYWAY.map(p => `<button class="chip${p === f.payWay ? ' on' : ''}" data-payway="${p}">${p}</button>`).join('')}
     </div></div>`;
@@ -770,16 +835,19 @@ function updateBonus() {
 
 function itemsBlock() {
   const f = SALE.form;
-  const disc = HAS_DISCOUNT(f.kind) ? `
+  // 退貨折讓沒有「折扣」這回事——要退多少就把單價填多少，
+  // 留著這個欄位只會讓人以為有作用（送出時根本不會讀它）
+  const disc = (HAS_DISCOUNT(f.kind) && !f.ret) ? `
     <div class="disc-row">
       <span class="dl">折扣<i>直接減多少錢，沒折扣就留空</i></span>
       ${numIn('fDisc', f.discount, '0')}
     </div>
     <div class="total-bar net" id="netBar"><span>銷貨金額</span><span id="saleNet">NT$0</span></div>` : '';
-  return `<div class="field"><label>訂單內容 <span class="req">*</span></label>
+  return `<div class="field"><label>${f.ret ? '要退的品項' : '訂單內容'} <span class="req">*</span></label>
     <div id="specGroups"></div>
     <button class="btn add-item" id="addSpecGroup">＋ 增加另一個產品</button>
-    <div class="total-bar"><span>金額合計</span><span id="saleTotal">NT$0</span></div>
+    ${f.ret ? `<div class="hint-row">單價填<b>要退給客人的金額</b>，不是原價。只退一部分錢就填那個數字。</div>` : ''}
+    <div class="total-bar${f.ret ? ' ret' : ''}"><span>${f.ret ? '退款合計' : '金額合計'}</span><span id="saleTotal">NT$0</span></div>
     ${disc}</div>`;
 }
 
@@ -834,6 +902,11 @@ function wireSaleBody() {
   document.querySelectorAll('#dwayChips .chip').forEach(c => c.onclick = () => { f.dSendWay = c.dataset.dway; renderSaleBody(); });
 
   on('fRestock', 'onchange', e => { f.restock = e.target.checked; renderSaleBody(); });
+  on('fRetStock', 'onchange', e => { f.retStock = e.target.checked; renderSaleBody(); });
+  document.querySelectorAll('#retSrcList [data-rsrc]').forEach(s => s.onchange = () => {
+    f.rsrc[s.dataset.rsrc] = s.value;
+    renderSaleBody();                 // 提示文字跟著更新，選到的值由 rsrc 記住
+  });
   on('fSelf', 'onchange', e => {
     f.selfPick = e.target.checked;
     // 勾了小賣自取就沒有「寄送」這個選項了，原本選寄送的自動切回店取
@@ -952,7 +1025,10 @@ function saleItemList() {
       qty: n, price: gv ? 0 : (Number(g.price[r]) || 0), gift: gv
     });
   }));
-  return fillItems(out, src);
+  const list = fillItems(out, src);
+  // 退貨折讓：每個品項各自退回哪裡，不是整張單一個來源
+  if (SALE.form.ret) list.forEach(i => { i.src = retSrcOf(i.row); });
+  return list;
 }
 function saleTotal() {
   const gross = itemsTotal(saleItemList()), d = discountOf(gross);
@@ -964,14 +1040,96 @@ function saleTotal() {
   updateBonus();
 }
 
+/* ----------------------------- 送出退貨折讓 ---------------------------- */
+/**
+ * 退貨折讓：寫進來店銷售分頁，但金額、成本都記**負的**，
+ * 這樣業績分析、今日銷售、日結全部會自動跟著減，不用每個報表各改一次。
+ *   貨有退回來 → 庫存往回加（unsell），成本也退（負的），毛利才對
+ *   純折讓     → 只退錢，庫存和成本都不動（成本記 0）
+ */
+async function submitReturn(items) {
+  const f = SALE.form, btn = $('submitSale');
+  const gone = items.filter(i => i.missing);
+  if (gone.length) return alert('下面這些品項在庫存表裡找不到，為了避免加錯庫存，這張單先不送出：\n\n'
+    + gone.map(i => `・${i.name} ${i.spec}`).join('\n'));
+  const free = items.filter(i => !isGift(i) && !(Number(i.price) > 0));
+  if (free.length && !confirm('下面這些品項的退款金額是 0：\n\n'
+    + free.map(i => `・${i.name} ${i.spec}`).join('\n')
+    + '\n\n確定要這樣送出嗎？（只退貨不退錢的話就按確定）')) return;
+
+  const withStock = !!f.retStock;
+  const gross = itemsTotal(items);                 // 正數，下面才轉負
+  const cost = withStock ? costOf(items) : 0;      // 純折讓沒有貨回來，不退成本
+  const plan = withStock
+    ? items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, src: i.src }))
+    : [];
+
+  const ok = await confirmModal({
+    title: `確認這張${SALES.RET_TYPE}單？`,
+    lines: `<p><b>${sEsc(f.store)}</b>　${sEsc(f.date)}　業務 <b>${sEsc(f.staff)}</b>
+        ${f.cName.trim() ? `　客戶 <b>${sEsc(f.cName.trim())}</b>` : ''}</p>
+      <pre class="pre">${esc(items.map(i =>
+        `・${i.name} ${i.spec} ×${i.qty}　${isGift(i) ? i.gift + '（不計價）' : '− ' + money(i.price * i.qty)}`
+        + (withStock ? `　→ ${srcLabel(i.src)}` : '')).join('\n'))}</pre>
+      <p style="font-size:17px"><b>退款金額 − ${money(gross)}</b>　·　${sEsc(f.payWay)}</p>
+      ${withStock
+        ? `<p style="font-size:14px;color:var(--ink-2)">貨會<b>加回庫存</b>（總數增加）：</p>
+           <pre class="pre">${esc(planText(plan, 'unsell'))}</pre>
+           <p style="font-size:13.5px;color:var(--ink-3)">成本 ${money(cost)} 也會一起退掉，毛利才算得對。</p>`
+        : `<div class="alert-box">🚫 <b>純折讓</b>——只退錢，<b>庫存和成本都不會動</b>。
+             <span style="display:block;font-weight:400;font-size:13px">貨沒有收回來，所以沒有成本可以退。</span></div>`}
+      <div class="alert-box">這筆會寫進<b>來店銷售</b>分頁，金額記 <b>− ${money(gross)}</b>，
+        單據性質標「${sEsc(SALES.RET_TYPE)}」。<br>
+        <span style="font-weight:400;font-size:13px"><b>${sEsc(f.staff)}</b> 的當月業績和毛利會被扣掉，
+        當天的營業額也會跟著減。</span></div>`,
+    okText: '確定，送出退貨',
+    danger: true
+  });
+  if (!ok) return;
+
+  S.busy = true; btn.disabled = true; btn.textContent = '送出中…';
+  try {
+    const id = 'R' + Date.now().toString(36).toUpperCase();
+    const v = new Array(SH_HEAD.shop.length).fill('');
+    const set = (key, val) => { if (SH_COL.shop[key] !== undefined) v[SH_COL.shop[key]] = val; };
+    set('id', id); set('訂單日期', f.date); set('建立時間', nowStr()); set('建立者', userName());
+    set('門市', f.store); set('負責業務', f.staff);
+    set('單據性質', SALES.RET_TYPE); set('客戶名稱', f.cName.trim());
+    set('品項明細', itemsText(items));
+    set('金額', -gross); set('成本', -cost);
+    set('收款方式', f.payWay); set('狀態', '有效');
+    set('備註', joinNote(f.noteTags, f.note));
+    set('品項JSON', JSON.stringify(items.map(i =>
+      ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, price: i.price, gift: i.gift || '' }))));
+    // 庫存異動JSON 記的是「加回去了多少」，作廢這張單的時候要照這個再扣回來
+    set('庫存異動JSON', JSON.stringify(plan));
+    set('庫存狀態', withStock
+      ? `已加回庫存（${[...new Set(plan.map(p => srcLabel(p.src)))].join('、')}）`
+      : '不扣（純折讓）');
+
+    await appendRow(SALE.titles.shop, v);
+    if (plan.length) await applyPlan(plan, 'unsell');
+    $('modalHost').innerHTML = ''; SALE.form = null;
+    await loadSales(); await loadProducts();
+    SALE.view = 'home'; renderSales();
+    toast(withStock ? '已送出退貨，庫存已加回' : '已送出折讓（庫存未動）', 'ok');
+  } catch (err) {
+    alert('送出失敗：\n\n' + err.message);
+  } finally {
+    S.busy = false;
+    if ($('submitSale')) { btn.disabled = false; btn.textContent = '送出退貨折讓單'; }
+  }
+}
+
 /* ----------------------------- 送出銷售單 ------------------------------ */
 async function submitSale() {
   const f = SALE.form, k = f.kind, btn = $('submitSale');
   if (f.editRow) return submitShopEdit();
   const items = saleItemList();
   if (!f.date) return alert('請選擇訂單日期');
-  if (!items.length) return alert('請選擇訂單內容');
+  if (!items.length) return alert(f.ret ? '請選擇要退的品項' : '請選擇訂單內容');
   if (!f.staff) return alert('請選擇負責業務');
+  if (f.ret) return submitReturn(items);
   if (k === 'online' && !f.cName.trim()) return alert('請填寫客戶名稱');
   if (k === 'online' && !f.tel.trim()) return alert('請填寫電話');
   if (k === 'mini' && !f.selfPick && !f.cName.trim()) return alert('請填寫客戶名稱，或勾選「小賣自取」');
@@ -1200,6 +1358,8 @@ window.staffList = () => staffNames().filter(n => String(n || '').trim());
 const shopVoided = r => String(r['狀態']) === SALES.VOID;
 const shopArchived = r => String(r['封存']) === '是';
 const shopLinked = r => !!String(r['關聯單號'] || '').trim();
+/** 這一列是退貨折讓單嗎？（來店分頁的「單據性質」欄） */
+const isRetRow = r => String(r['單據性質'] || '').trim() === SALES.RET_TYPE;
 /** 已存檔的來店單是不是補登單（送出時記在庫存狀態裡） */
 const rowBackfill = r => String(r['庫存狀態'] || '').includes(BACKFILL_TAG);
 
@@ -1273,19 +1433,25 @@ function shopPerf() {
 const payWayOf = r => SALES.PAYWAY.includes(r['收款方式']) ? r['收款方式'] : SALES.PAYWAY[0];
 
 function shopCard(r) {
-  const voided = shopVoided(r), linked = shopLinked(r);
+  const voided = shopVoided(r), linked = shopLinked(r), ret = isRetRow(r);
   const items = parseJSON(r['品項JSON'], []);
-  return `<div class="rec-card${voided ? ' is-void' : ''}" data-id="${sEsc(r.id)}" data-row="${r._row}">
+  return `<div class="rec-card${voided ? ' is-void' : ''}${ret ? ' is-ret' : ''}" data-id="${sEsc(r.id)}" data-row="${r._row}">
     <div class="rec-top">
       <span class="who2">${sEsc(r['門市'] || '—')}</span>
+      ${ret ? `<span class="pill-ret">↩ ${sEsc(SALES.RET_TYPE)}</span>` : ''}
       <span class="pill-pay ${voided ? 'no' : 'yes'}">${voided ? '已作廢' : '有效'}</span>
-      <span class="amt">${money(r['金額'])}<i class="pw ${payWayOf(r) === '匯款' ? 'bank' : 'cash'}">${sEsc(payWayOf(r))}</i></span>
+      <span class="amt${ret ? ' neg' : ''}">${pfMoney(r['金額'])}<i class="pw ${payWayOf(r) === '匯款' ? 'bank' : 'cash'}">${sEsc(payWayOf(r))}</i></span>
     </div>
     <div class="rec-meta">${sEsc(r['訂單日期'])}　·　業務 <b>${sEsc(r['負責業務'] || '—')}</b>　·　${sEsc(r.id)}
+      ${ret && String(r['客戶名稱'] || '').trim() ? `　·　客戶 ${sEsc(r['客戶名稱'])}` : ''}
       ${r['建立者'] ? `　·　開單 ${sEsc(r['建立者'])}` : ''}</div>
     <div class="rec-items">${items.length
-      ? items.map(i => `${sEsc(i.name)} ${sEsc(i.spec)} ×${i.qty}　${money((i.price || 0) * i.qty)}`).join('<br>')
+      ? items.map(i => `${sEsc(i.name)} ${sEsc(i.spec)} ×${i.qty}　${ret ? '− ' : ''}${money((i.price || 0) * i.qty)}`).join('<br>')
       : sEsc(r['品項明細'] || '（無明細）')}</div>
+    ${ret ? `<div class="note">↩ <b>${sEsc(SALES.RET_TYPE)}</b>——金額記負的，已從業績、毛利、當日營業額扣掉。
+      ${parseJSON(r['庫存異動JSON'], []).length
+        ? '貨<b>已經加回庫存</b>。' : '<b>純折讓</b>，庫存和成本都沒動。'}
+      要改的話請作廢重開，這種單不開放改品項。</div>` : ''}
     ${discLine(r, '金額')}
     ${r['備註'] ? `<div class="rec-meta">備註：${sEsc(r['備註'])}</div>` : ''}
     ${linked ? `<div class="note">🔗 由預訂單 ${sEsc(r['關聯單號'])} 自動產生，<b>不扣庫存</b>。品項要改請回留言板改那張預訂單。</div>` : ''}
@@ -1297,8 +1463,10 @@ function shopCard(r) {
     <div class="rec-foot"><span class="meta"></span>
       ${voided
         ? `<button class="btn btn-sm btn-ok" data-shoparchive="1">✓ 收起</button>`
-        : `<button class="btn btn-sm" data-shopedit="1">✎ 修改</button>
-           <button class="btn btn-sm btn-danger" data-shopvoid="1">🗑 作廢（退回庫存）</button>`}
+        : ret
+          ? `<button class="btn btn-sm btn-danger" data-shopvoid="1">🗑 作廢這張退貨單</button>`
+          : `<button class="btn btn-sm" data-shopedit="1">✎ 修改</button>
+             <button class="btn btn-sm btn-danger" data-shopvoid="1">🗑 作廢（退回庫存）</button>`}
     </div></div>`;
 }
 
@@ -1327,7 +1495,11 @@ function wireShopLog() {
     const r = SALE.rows.shop.find(x => x.id === card.dataset.id);
     if (!r) return;
     const ed = card.querySelector('[data-shopedit]');
-    if (ed) ed.onclick = () => openShopEdit(r);
+    // 退貨折讓單不開放改品項：改單那套差額邏輯是「賣出去」的方向，
+    // 套在「加回來」的單上會把庫存算反。要改就作廢重開。
+    if (ed) ed.onclick = () => isRetRow(r)
+      ? alert(`${SALES.RET_TYPE}單不能改品項。\n\n要修正的話請按「作廢這張退貨單」，再重新開一張。`)
+      : openShopEdit(r);
     const vd = card.querySelector('[data-shopvoid]');
     if (vd) vd.onclick = () => voidShopSale(r);
     const ar = card.querySelector('[data-shoparchive]');
@@ -1638,30 +1810,44 @@ async function archiveShopSale(r) {
 /* ---- 作廢來店單 ---- */
 async function voidShopSale(r) {
   const plan = normPlan(parseJSON(r['庫存異動JSON'], []));
+  /* 退貨折讓單的庫存是「加」進去的，作廢要反過來「扣」掉，
+     不能跟一般銷售單一樣再加一次——那會憑空多出一批貨。 */
+  const ret = isRetRow(r);
+  const mode = ret ? 'sell' : 'unsell';
   const ok = await confirmModal({
-    title: '確認作廢這張來店銷售單？',
-    lines: `<p><b>${sEsc(r['門市'])}</b>　${money(r['金額'])}　${sEsc(r['訂單日期'])}</p>
+    title: ret ? `確認作廢這張${SALES.RET_TYPE}單？` : '確認作廢這張來店銷售單？',
+    lines: `<p><b>${sEsc(r['門市'])}</b>　${pfMoney(r['金額'])}　${sEsc(r['訂單日期'])}</p>
       <pre class="pre">${esc(r['品項明細'] || '')}</pre>
       ${plan.length
-        ? `<p style="font-size:14px;color:var(--ink-2)">當初扣掉的貨會<b>原路加回去</b>：</p>
-           <pre class="pre">${esc(planText(plan, 'unsell'))}</pre>`
-        : `<div class="alert-box">這張單<b>本來就沒扣庫存</b>（來自預訂單），作廢只是把這筆營收作廢，庫存不會變。</div>`}
-      <div class="alert-box">作廢後這筆會標成「已作廢」留在試算表裡，不會消失，也不會再算進業績。</div>`,
+        ? ret
+          ? `<p style="font-size:14px;color:var(--ink-2)">當初<b>加回去</b>的貨會再<b>扣掉</b>（退貨取消，貨當作沒退回來）：</p>
+             <pre class="pre">${esc(planText(plan, 'sell'))}</pre>`
+          : `<p style="font-size:14px;color:var(--ink-2)">當初扣掉的貨會<b>原路加回去</b>：</p>
+             <pre class="pre">${esc(planText(plan, 'unsell'))}</pre>`
+        : ret
+          ? `<div class="alert-box">這張是<b>純折讓</b>，當初沒有動庫存，作廢也不會動。</div>`
+          : `<div class="alert-box">這張單<b>本來就沒扣庫存</b>（來自預訂單），作廢只是把這筆營收作廢，庫存不會變。</div>`}
+      <div class="alert-box">作廢後這筆會標成「已作廢」留在試算表裡，不會消失，也不會再算進業績。
+        ${ret ? `<span style="display:block;font-weight:400;font-size:13px">
+          原本被扣掉的 <b>${pfMoney(r['金額'])}</b> 業績會還給 <b>${sEsc(r['負責業務'] || '—')}</b>。</span>` : ''}</div>`,
     okText: '確定，作廢',
     danger: true
   });
   if (!ok) return;
   try {
-    if (plan.length) await applyPlan(plan, 'unsell');
+    if (plan.length) await applyPlan(plan, mode);
     await patchSale('shop', r, {
       狀態: SALES.VOID,
-      庫存狀態: plan.length ? '已退回庫存' : '不扣（來自預訂單）',
+      庫存狀態: plan.length
+        ? (ret ? '已扣回庫存（退貨作廢）' : '已退回庫存')
+        : (ret ? '不扣（純折讓）' : '不扣（來自預訂單）'),
       最後修改時間: nowStr(), 最後修改者: userName(),
-      修改紀錄: (String(r['修改紀錄'] || '') + `\n${nowStr()} ${userName()}：作廢${plan.length ? '，庫存已退回' : ''}`).trim()
+      修改紀錄: (String(r['修改紀錄'] || '')
+        + `\n${nowStr()} ${userName()}：作廢${plan.length ? (ret ? '，庫存已扣回' : '，庫存已退回') : ''}`).trim()
     });
     await loadSales(); await loadProducts();
     renderShopLog();
-    toast(plan.length ? '已作廢，庫存已退回' : '已作廢', 'ok');
+    toast(plan.length ? (ret ? '已作廢，庫存已扣回' : '已作廢，庫存已退回') : '已作廢', 'ok');
   } catch (err) { alert('作廢失敗：\n' + err.message); }
 }
 
