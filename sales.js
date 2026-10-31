@@ -67,12 +67,12 @@ const SH_HEAD = {
   shop: ['id', '訂單日期', '建立時間', '建立者', '門市', '負責業務', '品項明細', '金額', '成本',
          '備註', '品項JSON', '庫存異動JSON', '庫存狀態', '關聯單號', '狀態',
          '最後修改時間', '最後修改者', '修改紀錄', '封存', '收款方式', '折扣', '未折金額',
-         '單據性質', '客戶名稱'],
+         '單據性質', '客戶名稱', '補差價'],
   online: ['id', '訂單日期', '建立時間', '建立者', '客戶名稱', '電話', '訂單內容', '價格', '運費', '成本',
            '收款方式', '寄送方式', '店名',
            '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '備註',
            '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態', '庫存狀態',
-           '折扣', '未折金額', '會計確認', '會計確認者'],
+           '折扣', '未折金額', '會計確認', '會計確認者', '補差價'],
   mini: ['id', '訂單日期', '建立時間', '建立者', '銷售小賣', '客戶名稱', '小賣自取', '電話', '取貨方式',
          '訂單內容', '價格', '運費', '成本', '寄送方式', '店名',
          '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '獎金', '備註',
@@ -246,13 +246,31 @@ function discountOf(gross) {
 }
 /** 已存檔那一列的折扣 */
 const rowDisc = r => Math.max(0, Number(r['折扣']) || 0);
-/** 卡片上那一行「商品合計 → 折扣 → 銷貨金額」，沒折扣就不顯示 */
+
+/* ---- 補差價：換貨、點數換購時客人要「補」的那筆錢，加上去不是減下去 ----
+   為什麼需要這一欄：保固換貨／點數換贈／公關贈品這三種品項性質會把單價<b>鎖成 0</b>
+   （貨出去了但不算營收），所以客人補的那筆錢原本<b>沒有地方可以記</b>。
+   硬塞進單價會讓「不計價」的規則破功，塞進折扣又會變成負的折扣。
+      銷貨金額 = 未折金額 − 折扣 + 補差價                                  */
+/** 表單上的補差價：不能是負的。退貨折讓單沒有這回事 */
+function topUpOf() {
+  const f = SALE.form;
+  if (!f || !HAS_DISCOUNT(f.kind) || f.ret) return 0;
+  return Math.max(0, Math.round(Number(f.topup) || 0));
+}
+/** 已存檔那一列的補差價 */
+const rowTop = r => Math.max(0, Number(r['補差價']) || 0);
+
+/** 卡片上那一行「商品合計 → 折扣 → 補差價 → 銷貨金額」，兩個都沒有就不顯示 */
 function discLine(r, amtKey) {
-  const d = rowDisc(r);
-  if (!d) return '';
+  const d = rowDisc(r), t = rowTop(r);
+  if (!d && !t) return '';
   const net = Number(r[amtKey]) || 0;
-  const gross = Number(r['未折金額']) || (net + d);
-  return `<div class="disc-line">商品合計 ${money(gross)}　折扣 <b>− ${money(d)}</b>　→　銷貨金額 <b>${money(net)}</b></div>`;
+  const gross = Number(r['未折金額']) || (net + d - t);
+  return `<div class="disc-line">商品合計 ${money(gross)}`
+    + (d ? `　折扣 <b>− ${money(d)}</b>` : '')
+    + (t ? `　補差價 <b class="up">＋ ${money(t)}</b>` : '')
+    + `　→　銷貨金額 <b>${money(net)}</b></div>`;
 }
 
 /** 把品項補上 name/spec（從庫存表查） */
@@ -495,7 +513,8 @@ function openSaleForm(kind) {
     retStock: true,                    // 貨有退回來（取消勾選＝純折讓，只退錢）
     rsrc: {},                          // 每個品項退回哪裡：{ 庫存表列號: 欄位名稱 }
     groups: [newSpecGroup()],
-    cName: '', tel: '', note: '', noteTags: [], fee: '', bonus: '', discount: '', payStatus: SALES.PAY[0], payDate: '',
+    cName: '', tel: '', note: '', noteTags: [], fee: '', bonus: '', discount: '', topup: '',
+    payStatus: SALES.PAY[0], payDate: '',
     miniCollect: SALES.MINI_COLLECT[0],
     collect: SALES.COLLECT_COD,        // 網路單預設貨到付款
     payWay: SALES.PAYWAY[0],           // 來店單：現金／匯款
@@ -842,6 +861,10 @@ function itemsBlock() {
       <span class="dl">折扣<i>直接減多少錢，沒折扣就留空</i></span>
       ${numIn('fDisc', f.discount, '0')}
     </div>
+    <div class="disc-row up">
+      <span class="dl">補差價<i>換貨、點數換購時客人要補的錢，會<b>加</b>上去</i></span>
+      ${numIn('fTop', f.topup, '0')}
+    </div>
     <div class="total-bar net" id="netBar"><span>銷貨金額</span><span id="saleNet">NT$0</span></div>` : '';
   return `<div class="field"><label>${f.ret ? '要退的品項' : '訂單內容'} <span class="req">*</span></label>
     <div id="specGroups"></div>
@@ -875,6 +898,7 @@ function wireSaleBody() {
   document.querySelectorAll('.fFee').forEach(el => el.oninput = e => { f.fee = e.target.value; updateBonus(); });
   document.querySelectorAll('.fBonus').forEach(el => el.oninput = e => { f.bonus = e.target.value; updateBonus(); });
   document.querySelectorAll('.fDisc').forEach(el => el.oninput = e => { f.discount = e.target.value; saleTotal(); });
+  document.querySelectorAll('.fTop').forEach(el => el.oninput = e => { f.topup = e.target.value; saleTotal(); });
 
   document.querySelectorAll('#storeChips2 .chip').forEach(c => c.onclick = () => {
     f.store = c.dataset.store;
@@ -1031,12 +1055,12 @@ function saleItemList() {
   return list;
 }
 function saleTotal() {
-  const gross = itemsTotal(saleItemList()), d = discountOf(gross);
+  const gross = itemsTotal(saleItemList()), d = discountOf(gross), t = topUpOf();
   const el = $('saleTotal');
   if (el) el.textContent = money(gross);
   const ne = $('saleNet'), bar = $('netBar');
-  if (ne) ne.textContent = money(gross - d);
-  if (bar) bar.classList.toggle('has', d > 0);
+  if (ne) ne.textContent = money(gross - d + t);
+  if (bar) bar.classList.toggle('has', d > 0 || t > 0);
   updateBonus();
 }
 
@@ -1147,7 +1171,8 @@ async function submitSale() {
     const p = S.products.byRow.get(i.row);
     return p && i.qty > (p.nums[src] || 0);
   });
-  const gross = itemsTotal(items), disc = discountOf(gross), total = gross - disc;
+  const gross = itemsTotal(items), disc = discountOf(gross), top = topUpOf();
+  const total = gross - disc + top;
   const cost = costOf(items);
 
   const ok = await confirmModal({
@@ -1164,8 +1189,10 @@ async function submitSale() {
              <p style="font-size:14px;color:var(--ink-2)">這張單的內容：</p>`
           : `<p style="font-size:14px;color:var(--ink-2)">送出後會直接從 <b>${sEsc(srcLabel(src))}</b> 扣掉庫存（總數減少）：</p>`}
       <pre class="pre">${esc(items.map(i => `・${i.name} ${i.spec} ×${i.qty}　${isGift(i) ? i.gift + '（不計價）' : money(i.price * i.qty)}`).join('\n'))}</pre>
-      ${disc
-        ? `<p style="font-size:15px">合計 ${money(gross)}　折扣 <b style="color:var(--danger,#dc2626)">− ${money(disc)}</b><br>
+      ${disc || top
+        ? `<p style="font-size:15px">合計 ${money(gross)}
+             ${disc ? `　折扣 <b style="color:var(--danger,#dc2626)">− ${money(disc)}</b>` : ''}
+             ${top ? `　補差價 <b style="color:#0f766e">＋ ${money(top)}</b>` : ''}<br>
              <b style="font-size:17px">銷貨金額 ${money(total)}</b>${f.fee ? `　運費 ${money(f.fee)}` : ''}</p>`
         : `<p style="font-size:15px"><b>合計 ${money(total)}</b>${f.fee ? `　運費 ${money(f.fee)}` : ''}</p>`}
       ${k === 'shop' ? `<p style="font-size:14px;color:var(--ink-2)">收款方式：<b>${sEsc(f.payWay)}</b></p>` : ''}
@@ -1206,7 +1233,7 @@ async function submitSale() {
     set('庫存狀態', noStock ? `不扣（${tags.join('、')}）`
       : k === 'shop' ? '已扣庫存' : `已扣庫存（${srcLabel(src)}）`);
 
-    if (HAS_DISCOUNT(k)) { set('折扣', disc || ''); set('未折金額', gross); }
+    if (HAS_DISCOUNT(k)) { set('折扣', disc || ''); set('未折金額', gross); set('補差價', top || ''); }
 
     if (k === 'shop') {
       set('門市', f.store); set('品項明細', itemsText(items)); set('金額', total);
@@ -1539,6 +1566,7 @@ function openSaleEdit(kind, r) {
   f.noteTags = splitNote(r['備註']).tags;
   f.fee = r['運費'] === '' || r['運費'] === undefined ? '' : String(r['運費']);
   f.discount = rowDisc(r) ? String(rowDisc(r)) : '';
+  f.topup = rowTop(r) ? String(rowTop(r)) : '';
   f.bonus = bonusOf(r) ? String(bonusOf(r)) : '';
   // 同樣要用「名稱＋規格」找回產品，不能信單子上記的列號
   const lost = [];
@@ -1662,9 +1690,12 @@ function shopDiff(r, f, items) {
   if (HAS_DISCOUNT(k)) {
     const nd = discountOf(gross);
     if (rowDisc(r) !== nd) out.push(`折扣：${money(rowDisc(r))} → ${money(nd)}`);
+    const nt = topUpOf();
+    if (rowTop(r) !== nt) out.push(`補差價：${money(rowTop(r))} → ${money(nt)}`);
   }
   const amtKey = f.kind === 'shop' ? '金額' : '價格';
-  const oldA = Number(r[amtKey]) || 0, newA = gross - (HAS_DISCOUNT(k) ? discountOf(gross) : 0);
+  const oldA = Number(r[amtKey]) || 0;
+  const newA = gross - (HAS_DISCOUNT(k) ? discountOf(gross) - topUpOf() : 0);
   if (oldA !== newA) out.push(`${amtKey}：${money(oldA)} → ${money(newA)}`);
   return out;
 }
@@ -1711,13 +1742,14 @@ async function submitShopEdit() {
 
     const gross = itemsTotal(items);
     const disc = HAS_DISCOUNT(k) ? discountOf(gross) : 0;
-    const total = gross - disc;
+    const top = HAS_DISCOUNT(k) ? topUpOf() : 0;
+    const total = gross - disc + top;
     const patch = {
       訂單日期: f.date, 負責業務: f.staff, 備註: joinNote(f.noteTags, f.note), 成本: costOf(items),
       品項JSON: JSON.stringify(items.map(i => ({ row: i.row, name: i.name, spec: i.spec, qty: i.qty, price: i.price, gift: i.gift || '' }))),
       庫存異動JSON: frozen ? '[]' : JSON.stringify(newPlan)
     };
-    if (HAS_DISCOUNT(k)) { patch['折扣'] = disc || ''; patch['未折金額'] = gross; }
+    if (HAS_DISCOUNT(k)) { patch['折扣'] = disc || ''; patch['未折金額'] = gross; patch['補差價'] = top || ''; }
     if (k === 'shop') {
       Object.assign(patch, {
         門市: f.store, 品項明細: itemsText(items), 金額: total, 收款方式: f.payWay,
