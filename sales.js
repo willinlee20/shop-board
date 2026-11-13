@@ -234,6 +234,34 @@ const itemsText = items => items.map(i =>
   `${i.name} ${i.spec} ×${i.qty}${isGift(i) ? `（${i.gift}）` : ''}`).join('\n');
 const itemsTotal = items => items.reduce((s, i) => s + (isGift(i) ? 0 : i.qty * (i.price || 0)), 0);
 
+/**
+ * 把一張單的品項畫成一行一個，後面帶<b>單價</b>，數量超過 1 才再列小計。
+ * 對帳的時候不用再開試算表去查單價。
+ *
+ * 價格是從「品項JSON」讀的，不是從存起來的文字——所以<b>舊單也看得到單價</b>。
+ * 真的沒有品項JSON 的（很早期的單、或手動在試算表打的），就退回顯示當初存的
+ * 「品項明細／訂單內容」文字，不會變成空白。
+ * @param neg 退貨折讓單：金額前面加負號
+ */
+function itemLines(r, neg) {
+  const items = parseJSON(r['品項JSON'], []);
+  if (!items.length) {
+    const raw = String(r['品項明細'] || r['訂單內容'] || '');
+    return raw ? sEsc(raw).replace(/\n/g, '<br>') : '（無明細）';
+  }
+  const sign = neg ? '− ' : '';
+  // 容器是 white-space:pre-wrap，所以這裡不能有多餘的換行和縮排，不然會多出空白行
+  return items.map(i => {
+    const q = Number(i.qty) || 0, p = Number(i.price) || 0;
+    const right = isGift(i)
+      ? `<span class="pr gift">${sEsc(i.gift)}</span>`
+      : `<span class="pr">${sign}${money(p)}</span>`
+        + (q > 1 ? `<span class="sub">${sign}${money(p * q)}</span>` : '');
+    return `<div class="it-line"><span class="nm">${sEsc(i.name)}${i.spec ? ' ' + sEsc(i.spec) : ''}</span>`
+      + `<span class="qt">×${q}</span>${right}</div>`;
+  }).join('');
+}
+
 /* ---- 折扣：只有來店、網路單有。一律是「直接減多少錢」，不是打幾折 ----
    試算表的「金額 / 價格」存的是<b>折扣後</b>的銷貨金額，
    另外用「未折金額」留下折扣前的合計，出納和報表都不必再自己算。      */
@@ -1472,9 +1500,7 @@ function shopCard(r) {
     <div class="rec-meta">${sEsc(r['訂單日期'])}　·　業務 <b>${sEsc(r['負責業務'] || '—')}</b>　·　${sEsc(r.id)}
       ${ret && String(r['客戶名稱'] || '').trim() ? `　·　客戶 ${sEsc(r['客戶名稱'])}` : ''}
       ${r['建立者'] ? `　·　開單 ${sEsc(r['建立者'])}` : ''}</div>
-    <div class="rec-items">${items.length
-      ? items.map(i => `${sEsc(i.name)} ${sEsc(i.spec)} ×${i.qty}　${ret ? '− ' : ''}${money((i.price || 0) * i.qty)}`).join('<br>')
-      : sEsc(r['品項明細'] || '（無明細）')}</div>
+    <div class="rec-items">${itemLines(r, ret)}</div>
     ${ret ? `<div class="note">↩ <b>${sEsc(SALES.RET_TYPE)}</b>——金額記負的，已從業績、毛利、當日營業額扣掉。
       ${parseJSON(r['庫存異動JSON'], []).length
         ? '貨<b>已經加回庫存</b>。' : '<b>純折讓</b>，庫存和成本都沒動。'}
@@ -2138,7 +2164,7 @@ function pickCard(r, kind) {
     </div>
     <div class="pick-sub">${sEsc(r['訂單日期'])} · ${sEsc(r.id)} · ${sEsc(r['負責業務'] || '—')}${r['電話'] ? ' · ' + sEsc(r['電話']) : ''}</div>
 
-    <div class="pick-items">${sEsc(r['訂單內容'] || '（無品項）')}</div>
+    <div class="pick-items">${itemLines(r)}</div>
     ${discLine(r, '價格')}
     ${rowBackfill(r)
       ? `<div class="pick-flag back">📝 <b>銷售紀錄補登</b>　這張單<b>沒有扣庫存</b>，貨早就出去了，不用撿貨</div>`
@@ -2227,7 +2253,7 @@ function recvCard(r, kind) {
     <div class="rec-meta">${sEsc(r['訂單日期'])}　·　${sEsc(r['負責業務'] || '—')}　·　${sEsc(r.id)}
       ${r['電話'] && !na(r['電話']) ? '　·　' + sEsc(r['電話']) : ''}
       ${kind === 'dist' ? `　·　${sEsc((String(r['寄送方式']) === SALES.HOME_DELIVERY ? r['宅配地址'] : r['收貨門市']) || '')} ${sEsc(r['收貨人'] || '')} ${sEsc(r['收貨人電話'] || '')}` : ''}</div>
-    <div class="rec-items">${sEsc(r['訂單內容'] || '')}</div>
+    <div class="rec-items">${itemLines(r)}</div>
     ${discLine(r, '價格')}
     ${kind === 'mini' ? `<div class="bonus-line">銷貨金額 ${money(grossOf(r))}　−　銷售獎金 <b>${money(bonusOf(r))}</b>　→　應收貨款 <b>${money(owedOf(r))}</b></div>` : ''}
     ${r['備註'] ? `<div class="rec-meta">備註：${sEsc(r['備註'])}</div>` : ''}
@@ -2755,7 +2781,7 @@ function runQuery() {
           <span class="amt">${money(r['金額'] || r['價格'])}</span></div>
         <div class="rec-meta">${sEsc(r['訂單日期'])}　·　${sEsc(r['負責業務'] || '—')}　·　${sEsc(r.id)}
           ${r['結帳狀態'] ? '　·　' + sEsc(r['結帳狀態']) : ''}${String(r['封存']) === '是' ? '　·　已收起' : ''}</div>
-        <div class="rec-items">${sEsc(r['品項明細'] || r['訂單內容'] || '')}</div>
+        <div class="rec-items">${itemLines(r, isRetRow(r))}</div>
       </div>`).join('')
       : `<div class="empty">沒有符合的訂單</div>`);
 }

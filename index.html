@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="5.3">
+<meta name="app-version" content="5.4">
 <title>西門龍門儀錶板</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -696,6 +696,19 @@ textarea{min-height:84px;resize:vertical}
 .rec-meta{font-size:12px;color:var(--ink-3);margin-bottom:10px}
 .rec-items{font-size:13.5px;color:var(--ink-2);white-space:pre-wrap;background:#f8fafc;
   border-radius:9px;padding:8px 11px;margin-bottom:10px}
+/* 一行一個品項：名稱靠左、數量和單價靠右對齊，對帳的時候一欄一欄看得下來。
+   數量超過 1 才會再多一個小計。 */
+.it-line{display:flex;align-items:baseline;gap:8px;white-space:normal;
+  padding:3px 0;border-bottom:1px dotted var(--line)}
+.it-line:last-child{border-bottom:0}
+.it-line .nm{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+.it-line .qt{flex:0 0 auto;font-weight:700;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.it-line .pr{flex:0 0 auto;font-weight:700;color:var(--ink);
+  font-variant-numeric:tabular-nums;text-align:right;min-width:62px}
+.it-line .pr.gift{font-size:11.5px;font-weight:700;color:var(--violet);
+  background:var(--violet-soft);border-radius:999px;padding:1px 8px;min-width:0}
+.it-line .sub{flex:0 0 auto;font-weight:800;color:var(--brand);
+  font-variant-numeric:tabular-nums;text-align:right;min-width:72px}
 .st-grid{display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
 .st-grid label{display:block;font-size:11.5px;color:var(--ink-3);margin-bottom:3px}
 .st-grid select,.st-grid input{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:#fff}
@@ -835,7 +848,7 @@ textarea{min-height:84px;resize:vertical}
 <div id="toastHost"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="app.js?v=5.3"></script>
-<script src="sales.js?v=5.3"></script>
+<script src="app.js?v=5.4"></script>
+<script src="sales.js?v=5.4"></script>
 </body>
 </html>
