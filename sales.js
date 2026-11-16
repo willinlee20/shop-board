@@ -580,7 +580,13 @@ function applyDistDefaults() {
 function saleSrc() {
   const f = SALE.form;
   if (f.kind === 'shop') return storeCol(f.store);
-  if (f.kind === 'mini') return f.pickup === '寄送' ? CONFIG.H.warehouse : storeCol(SALES.PICK_STORE[f.pickup]);
+  /* 小賣：店取預設從那間門市扣。但勾了「請協助從總倉備貨」就改成**直接扣總倉**——
+     那種情況貨是從總倉調出來給小賣的，門市架上的貨根本沒被動到，
+     先扣門市再用備貨單補回去只會讓門市的數字在中間那段時間憑空少一批。 */
+  if (f.kind === 'mini') {
+    if (f.pickup === '寄送' || (canRestock() && f.restock)) return CONFIG.H.warehouse;
+    return storeCol(SALES.PICK_STORE[f.pickup]);
+  }
   // 網路單：同事在「庫存處理」直接選要從哪裡出（總倉／三重／西門）
   if (f.kind === 'online') return f.onSrc || CONFIG.H.warehouse;
   return CONFIG.H.warehouse;
@@ -800,8 +806,10 @@ function renderSaleBody() {
           <label class="check-inline${f.restock ? ' on' : ''}">
             <input type="checkbox" id="fRestock" ${f.restock ? 'checked' : ''}>🚚 請協助從總倉備貨</label>
           <div class="hint-row">${f.restock
-            ? `送出後會<b>自動開一張備貨單</b>，把同樣的貨從<b>總倉</b>調到 <b>${sEsc(pickStore(f.pickup))}</b>，把賣掉的補回來。`
-            : `這張單的貨是直接從 <b>${sEsc(pickStore(f.pickup))}</b> 扣的。門市要補貨就勾這個。`}</div>
+            ? `這張單的庫存<b>直接扣總倉</b>，<b>${sEsc(pickStore(f.pickup))}</b> 的數字完全不動。
+               送出後會開一張備貨單提醒把貨從總倉送到 <b>${sEsc(pickStore(f.pickup))}</b>，那張單<b>不會再動庫存</b>。`
+            : `這張單的貨是直接從 <b>${sEsc(pickStore(f.pickup))}</b> 扣的（門市架上的貨拿給小賣）。
+               貨要從總倉調的話就勾這個。`}</div>
         </div>` : ''}</div>`
       + itemsBlock()
       + (f.pickup === '寄送' ? `
@@ -1234,8 +1242,9 @@ async function submitSale() {
       ${k === 'online' ? `<p style="font-size:14px;color:var(--ink-2)">寄送方式：<b>${sEsc(f.sendWay)}</b>${f.storeName.trim() ? `　店名：<b>${sEsc(f.storeName.trim())}</b>` : '　（店名未填）'}<br>
         結帳狀態：<b>${sEsc(f.collect)}</b> → 試算表記「<b>${f.collect === SALES.COLLECT_PAID ? '已結帳' : '未結帳'}</b>」</p>` : ''}
       ${canRestock() && f.restock ? `<div class="alert-box">🚚 送出後會<b>自動開一張備貨單</b>，
-        把同樣的貨從<b>總倉</b>調到 <b>${sEsc(pickStore(f.pickup))}</b>。<br>
-        <span style="font-weight:400;font-size:13px">這張小賣單是從門市扣貨的，備貨單送到門市後按「備貨完成」，門市的數量才會補回來。</span></div>` : ''}
+        提醒把貨從<b>總倉</b>送到 <b>${sEsc(pickStore(f.pickup))}</b> 給小賣。<br>
+        <span style="font-weight:400;font-size:13px">庫存<b>這張單就直接扣總倉了</b>，
+        <b>${sEsc(pickStore(f.pickup))}</b> 的數字完全不動。那張備貨單只是送貨提醒，<b>不會再動庫存</b>。</span></div>` : ''}
       ${short.length ? `<div class="warn-box">⚠ 以下品項在${sEsc(srcLabel(src))}庫存不足，送出後會變負數：<br>
         ${short.map(i => `・${sEsc(i.name)} ${sEsc(i.spec)}`).join('<br>')}</div>` : ''}`,
     okText: '確定送出'
@@ -1322,10 +1331,11 @@ async function submitSale() {
     if (wantRestock && window.createRestockOrder) {
       try {
         restock = await window.createRestockOrder({
-          items, store: toStore, date: f.date, saleId: id,
+          items, store: toStore, date: f.date, saleId: id, noteOnly: true,
           note: `配合小賣單「${f.miniName}${f.cName.trim() ? ' ' + f.cName.trim() : ''}」（${id}）`
-            + `從總倉補貨到 ${toStore}。這批貨已經從門市賣出去了，`
-            + `這張單按「備貨完成」之後，門市的數量才會補回來。`
+            + `從總倉送貨到 ${toStore} 給小賣取件。`
+            + `庫存那張銷售單已經直接從總倉扣掉了，${toStore} 的數字沒有動，`
+            + `這張單只是送貨提醒，按「已送達」不會再動庫存。`
         });
       } catch (err) {
         alert('小賣單已經送出了，但自動開立備貨單失敗：\n\n' + err.message
@@ -1337,7 +1347,7 @@ async function submitSale() {
     await loadSales(); await loadProducts();
     SALE.view = 'home'; renderSales();
     toast(noStock ? `${SALES.LABEL[k]}銷售單已送出（${tags.join('、')}，未扣庫存）`
-      : restock ? `${SALES.LABEL[k]}銷售單已送出，並開了一張從總倉補貨到 ${toStore} 的備貨單`
+      : restock ? `${SALES.LABEL[k]}銷售單已送出（庫存扣總倉），並開了一張送貨到 ${toStore} 的提醒單`
         : `${SALES.LABEL[k]}銷售單已送出，庫存已扣`, 'ok');
   } catch (err) {
     alert('送出失敗：\n\n' + err.message);
@@ -1637,6 +1647,10 @@ function openSaleEdit(kind, r) {
     f.cName = r['客戶名稱'] || ''; f.tel = r['電話'] || '';
     f.selfPick = String(r['小賣自取']) === '是';
     f.pickup = pickupOptions().includes(r['取貨方式']) ? r['取貨方式'] : pickupOptions()[0];
+    /* 這張單當初是不是勾了「請協助從總倉備貨」——看它的庫存實際扣在哪裡就知道。
+       不還原的話，改單時會以為沒勾，把扣總倉的量退回去、改成扣門市（門市憑空少一批）。 */
+    f.restock = normPlan(parseJSON(r['庫存異動JSON'], []))
+      .some(p => (p.src || '') === CONFIG.H.warehouse);
     f.sendWay = miniWays().includes(r['寄送方式']) ? r['寄送方式'] : SALES.SEND_WAY[0];
     f.storeName = r['店名'] === SALES.NA ? '' : (r['店名'] || '');
     f.shipCode = r['寄件代碼'] === SALES.NA ? '' : (r['寄件代碼'] || '');

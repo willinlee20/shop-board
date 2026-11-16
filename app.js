@@ -5,8 +5,8 @@
    ========================================================================= */
 
 /* ----------------------------- 版本 ------------------------------------ */
-const APP_VERSION = '5.4';          // 每次改版都會更新，畫面右上角看得到
-const APP_DATE = '2026-11-13';
+const APP_VERSION = '5.5';          // 每次改版都會更新，畫面右上角看得到
+const APP_DATE = '2026-11-16';
 
 /* ----------------------------- 設定區 -----------------------------------
    要改的東西都在這裡，下面的程式不用動。
@@ -943,14 +943,20 @@ function cardHTML(r) {
     if (String(r['關聯單號'] || '').trim()) {
       body = `<div class="alert-box big">🚚 從總倉調度，請協助備貨
         <span>${noteOnly
-          ? `客人在 ${esc(r['門市'])} 取貨，但貨在總倉。請把下面的貨送到門市。`
+          ? `貨在總倉，取件在 ${esc(r['門市'])}。請把下面的貨送到門市。`
           : `${esc(r['門市'])} 的貨已經賣掉了，請從總倉補這些貨過去。`}</span></div>` + body;
     }
     if (r['庫存狀態'] === STOCK.FAILED) {
       body += `<div class="note bad">⚠ 這張備貨單的庫存還沒扣成功。請按下面的「重試扣庫存」。</div>`;
     } else if (noteOnly) {
-      if (!done) body += `<div class="note">這張單<b>不會動庫存</b>——貨已經在預訂單送出時預留好了。
-        送到門市後按「已送達」就好，客人取貨請到那張預訂單按「確認取貨完成」。</div>`;
+      /* 不動庫存的送貨提醒單有兩種來源：
+         · 關聯單號找得到留言板上的預訂單 → v4.8 以前的預訂單跟單
+         · 找不到（關聯的是銷售分頁的單號）→ 小賣勾了「請協助從總倉備貨」 */
+      if (!done) body += orderStockup(r)
+        ? `<div class="note">這張單<b>不會動庫存</b>——貨已經在預訂單送出時預留好了。
+            送到門市後按「已送達」就好，客人取貨請到那張預訂單按「確認取貨完成」。</div>`
+        : `<div class="note">這張單<b>不會動庫存</b>——那張小賣單已經<b>直接從總倉扣掉</b>了，
+            ${esc(r['門市'])} 的數字從頭到尾沒有動。把貨送到門市交給小賣之後，按「已送達」就好。</div>`;
     } else if (!done && orderStockup(r)) {
       body += `<div class="note">貨現在掛在「預定專區」。送到 ${esc(r['門市'])} 之後按「備貨完成」，
         就會轉進 ${esc(r['門市'])} 的庫存（總數不變），之後客人取貨就從門市扣。
@@ -1218,9 +1224,14 @@ document.addEventListener('click', async e => {
     const ok = await confirmModal({
       title: linked || ord ? '貨已經送到門市了？' : '備貨已經送到門市了？',
       lines: linked
-        ? `<p>去向：<b>${esc(r['門市'])}</b>　（配合預訂單 ${esc(r['關聯單號'])}）</p>
-           <p style="color:var(--ink-2);font-size:14px">這張是舊版的送貨提醒單，<b>不會動到庫存</b>。
-           貨還是留在「預定專區」，等客人來取貨時，請到那張預訂單按「確認取貨完成」。</p>`
+        ? orderStockup(r)
+          ? `<p>去向：<b>${esc(r['門市'])}</b>　（配合預訂單 ${esc(r['關聯單號'])}）</p>
+             <p style="color:var(--ink-2);font-size:14px">這張是舊版的送貨提醒單，<b>不會動到庫存</b>。
+             貨還是留在「預定專區」，等客人來取貨時，請到那張預訂單按「確認取貨完成」。</p>`
+          : `<p>去向：<b>${esc(r['門市'])}</b>　（配合小賣單 ${esc(r['關聯單號'])}）</p>
+             <p style="color:var(--ink-2);font-size:14px">這張是送貨提醒單，<b>不會動到庫存</b>。
+             那張小賣單送出時就已經<b>直接從總倉扣掉</b>了，${esc(r['門市'])} 的數字從頭到尾沒有動。
+             貨送到門市交給小賣之後，按下面的「已送達」就好。</p>`
         : ord
         ? `<p>去向：<b>${esc(r['門市'])}</b>　（配合預訂單 ${esc(ord['客戶名稱'] || ord.id)}）</p>
            <p style="color:var(--ink-2);font-size:14px">按下確定後，這批貨會從「預定專區」<b>轉進 ${esc(r['門市'])} 的庫存</b>
@@ -2373,14 +2384,26 @@ window.createRestockOrder = async function (opt) {
     ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, price: 0, src: p.src }))));
   set('庫存異動JSON', JSON.stringify(plan.map(p =>
     ({ row: p.row, name: p.name, spec: p.spec, qty: p.qty, src: p.src }))));
-  set('庫存狀態', STOCK.FAILED);              // 扣成功再改成「已預留」
+  /* opt.noteOnly：這張備貨單**不碰庫存**，只是提醒有人把貨從總倉送到門市。
+     小賣勾「請協助從總倉備貨」就是這種——那張銷售單已經直接把總倉扣掉了，
+     門市架上的貨根本沒被動到，這裡再搬一次會變成重複。 */
+  if (opt.noteOnly) {
+    set('庫存異動JSON', '[]');                 // 空的 → 完成或取消時都不會動庫存
+    set('庫存狀態', STOCK.NA);
+  } else {
+    set('庫存狀態', STOCK.FAILED);            // 扣成功再改成「已預留」
+  }
   set('關聯單號', opt.saleId || '');
   set('備註', opt.note || '');
   await appendRow(S.boardTitle, v);
-  await applyPlan(plan, 'reserve');
-  await loadBoard();
-  const nr = (S.board || []).find(x => x.id === id);
-  if (nr) await updateBoardRow(nr, { 庫存狀態: STOCK.RESERVED });
+  if (!opt.noteOnly) {
+    await applyPlan(plan, 'reserve');
+    await loadBoard();
+    const nr = (S.board || []).find(x => x.id === id);
+    if (nr) await updateBoardRow(nr, { 庫存狀態: STOCK.RESERVED });
+  } else {
+    await loadBoard();
+  }
   render();          // 留言板那邊馬上看得到，不用等下一次自動更新
   return { id, plan };
 };
