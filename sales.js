@@ -56,6 +56,9 @@ const SALES = {
   RETURN_PICK: ['即將退貨', '退貨路上', '包裹異常'],   // 這幾種可以按「退貨入庫」
   RETURNED: '已退貨入庫',
   SEND_WAY:      ['7-11', '全家'],
+  /* 網路單自己一份寄送方式：多一個「宅配」。
+     小賣的寄送還是用上面那份（小賣沒有宅配），所以不能直接往 SEND_WAY 加。 */
+  ON_SEND_WAY:   ['7-11', '全家', '宅配'],
   DIST_SEND_WAY: ['7-11店到店', '全家店到店', '宅配'],
   HOME_DELIVERY: '宅配',
   PICKUP: ['三重店取', '西門店取', '寄送'],
@@ -72,7 +75,7 @@ const SH_HEAD = {
            '收款方式', '寄送方式', '店名',
            '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '備註',
            '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態', '庫存狀態',
-           '折扣', '未折金額', '會計確認', '會計確認者', '補差價'],
+           '折扣', '未折金額', '會計確認', '會計確認者', '補差價', '宅配地址'],
   mini: ['id', '訂單日期', '建立時間', '建立者', '銷售小賣', '客戶名稱', '小賣自取', '電話', '取貨方式',
          '訂單內容', '價格', '運費', '成本', '寄送方式', '店名',
          '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '獎金', '備註',
@@ -771,10 +774,13 @@ function renderSaleBody() {
       + itemsBlock() + noStockBlock()
       + `<div class="field"><label>寄送方式 <span class="req">*</span></label>
           <div class="chips big-chips" id="wayChips">
-            ${SALES.SEND_WAY.map(w => `<button class="chip${w === f.sendWay ? ' on' : ''}" data-way="${w}">${w}</button>`).join('')}
+            ${SALES.ON_SEND_WAY.map(w => `<button class="chip${w === f.sendWay ? ' on' : ''}" data-way="${w}">${w}</button>`).join('')}
           </div></div>
-        <div class="field"><label>店名</label>
-          <input type="text" id="fStoreName" value="${sEsc(f.storeName)}" placeholder="例如：7-11 興一門市"></div>`
+        ${f.sendWay === SALES.HOME_DELIVERY
+          ? `<div class="field"><label>宅配地址 <span class="req">*</span></label>
+              <input type="text" id="fRAddr" value="${sEsc(f.rAddr)}" placeholder="例如：桃園市中壢區○○路 123 號 5 樓"></div>`
+          : `<div class="field"><label>店名</label>
+              <input type="text" id="fStoreName" value="${sEsc(f.storeName)}" placeholder="例如：7-11 興一門市"></div>`}`
       + feeField
       + `<div class="field"><label>結帳狀態 <span class="req">*</span></label>
           <div class="chips big-chips" id="collectChips">
@@ -1194,6 +1200,7 @@ async function submitSale() {
   if (k === 'online' && !f.tel.trim()) return alert('請填寫電話');
   if (k === 'mini' && !f.selfPick && !f.cName.trim()) return alert('請填寫客戶名稱，或勾選「小賣自取」');
   if (k === 'dist' && f.dSendWay === SALES.HOME_DELIVERY && !f.rAddr.trim()) return alert('選擇宅配時請填寫宅配地址');
+  if (k === 'online' && f.sendWay === SALES.HOME_DELIVERY && !f.rAddr.trim()) return alert('選擇宅配時請填寫宅配地址');
   if (((k === 'mini' && f.pickup === '寄送' && byCode(f.sendWay)) || (k === 'dist' && byCode(f.dSendWay)))
       && !String(f.shipCode || '').trim()) return alert('選了「收件者提供寄件代號」，請填寫客人給的寄件代號');
   const gone = items.filter(i => i.missing);
@@ -1239,7 +1246,10 @@ async function submitSale() {
             ? `宅配地址：<b>${sEsc(f.rAddr.trim()) || '（未填）'}</b>`
             : `收貨門市：<b>${sEsc(f.rShop.trim()) || '（未填）'}</b>`}
         　收貨人：<b>${sEsc(f.rName.trim()) || '（未填）'}</b></p>` : ''}
-      ${k === 'online' ? `<p style="font-size:14px;color:var(--ink-2)">寄送方式：<b>${sEsc(f.sendWay)}</b>${f.storeName.trim() ? `　店名：<b>${sEsc(f.storeName.trim())}</b>` : '　（店名未填）'}<br>
+      ${k === 'online' ? `<p style="font-size:14px;color:var(--ink-2)">寄送方式：<b>${sEsc(f.sendWay)}</b>${
+        f.sendWay === SALES.HOME_DELIVERY
+          ? `<br>宅配地址：<b>${sEsc(f.rAddr.trim()) || '（未填）'}</b>`
+          : (f.storeName.trim() ? `　店名：<b>${sEsc(f.storeName.trim())}</b>` : '　（店名未填）')}<br>
         結帳狀態：<b>${sEsc(f.collect)}</b> → 試算表記「<b>${f.collect === SALES.COLLECT_PAID ? '已結帳' : '未結帳'}</b>」</p>` : ''}
       ${canRestock() && f.restock ? `<div class="alert-box">🚚 送出後會<b>自動開一張備貨單</b>，
         提醒把貨從<b>總倉</b>送到 <b>${sEsc(pickStore(f.pickup))}</b> 給小賣。<br>
@@ -1285,7 +1295,11 @@ async function submitSale() {
     }
     if (k === 'online') {
       set('客戶名稱', f.cName.trim()); set('電話', f.tel.trim());
-      set('寄送方式', f.sendWay); set('店名', f.storeName.trim());
+      // 宅配沒有店名，超商沒有宅配地址——用不到的那一欄存 N/A，免得看起來像漏填
+      const onHome = f.sendWay === SALES.HOME_DELIVERY;
+      set('寄送方式', f.sendWay);
+      set('店名', onHome ? na : f.storeName.trim());
+      set('宅配地址', onHome ? f.rAddr.trim() : na);
       // 前台只選收款方式，結帳狀態由系統推：已收貨款 → 已結帳
       const paidNow = f.collect === SALES.COLLECT_PAID;
       set('收款方式', f.collect);
@@ -1630,8 +1644,9 @@ function openSaleEdit(kind, r) {
   }
   if (kind === 'online') {
     f.cName = r['客戶名稱'] || ''; f.tel = r['電話'] || '';
-    f.sendWay = SALES.SEND_WAY.includes(r['寄送方式']) ? r['寄送方式'] : SALES.SEND_WAY[0];
-    f.storeName = r['店名'] || '';
+    f.sendWay = SALES.ON_SEND_WAY.includes(r['寄送方式']) ? r['寄送方式'] : SALES.ON_SEND_WAY[0];
+    f.storeName = r['店名'] === SALES.NA ? '' : (r['店名'] || '');
+    f.rAddr = r['宅配地址'] === SALES.NA ? '' : (r['宅配地址'] || '');
     f.collect = SALES.COLLECT.includes(r['收款方式']) ? r['收款方式']
       : (String(r['結帳狀態']) === '已結帳' ? SALES.COLLECT_PAID : SALES.COLLECT_COD);
     f.payDate = r['結帳日'] || '';
@@ -1706,7 +1721,9 @@ function shopDiff(r, f, items) {
   }
   if (k === 'online' || k === 'mini') { cmp('客戶名稱', r['客戶名稱'], f.cName.trim()); cmp('電話', r['電話'], f.tel.trim()); }
   if (k === 'online') {
-    cmp('寄送方式', r['寄送方式'], f.sendWay); cmp('店名', r['店名'], f.storeName.trim());
+    cmp('寄送方式', r['寄送方式'], f.sendWay);
+    if (f.sendWay === SALES.HOME_DELIVERY) cmp('宅配地址', r['宅配地址'], f.rAddr.trim());
+    else cmp('店名', r['店名'], f.storeName.trim());
     cmp('收款方式', r['收款方式'], f.collect);
     cmp('庫存處理', r['庫存狀態'],
       skipStock() ? `不扣（${noStockTags().join('、')}）` : `已扣庫存（${srcLabel(saleSrc())}）`);
@@ -1749,6 +1766,7 @@ async function submitShopEdit() {
   if (k === 'online' && !f.cName.trim()) return alert('請填寫客戶名稱');
   if (k === 'mini' && !f.selfPick && !f.cName.trim()) return alert('請填寫客戶名稱，或勾選「小賣自取」');
   if (k === 'dist' && f.dSendWay === SALES.HOME_DELIVERY && !f.rAddr.trim()) return alert('選擇宅配時請填寫宅配地址');
+  if (k === 'online' && f.sendWay === SALES.HOME_DELIVERY && !f.rAddr.trim()) return alert('選擇宅配時請填寫宅配地址');
 
   // 這張單現在還扣不扣庫存
   const linked = k === 'shop' && shopLinked(r);
@@ -1812,7 +1830,9 @@ async function submitShopEdit() {
       const nowPaid = paidNow || String(r['結帳狀態']) === '已結帳';
       Object.assign(patch, {
         客戶名稱: f.cName.trim(), 電話: f.tel.trim(),
-        寄送方式: f.sendWay, 店名: f.storeName.trim(),
+        寄送方式: f.sendWay,
+        店名: f.sendWay === SALES.HOME_DELIVERY ? SALES.NA : f.storeName.trim(),
+        宅配地址: f.sendWay === SALES.HOME_DELIVERY ? f.rAddr.trim() : SALES.NA,
         收款方式: f.collect, 結帳狀態: nowPaid ? '已結帳' : '未結帳',
         結帳確認者: nowPaid ? (r['結帳確認者'] || userName() + ' ' + nowStr()) : '',
         結帳日: nowPaid ? (r['結帳日'] || f.payDate || f.date) : '',
@@ -2185,11 +2205,19 @@ function pickCard(r, kind) {
       : noStock ? `<div class="pick-flag">🚫 ${sEsc(r['庫存狀態'])}　貨還沒進來，不要撿貨</div>` : ''}
     ${r['備註'] ? `<div class="pick-note">備註：${sEsc(r['備註'])}</div>` : ''}
 
-    <div class="pick-row">
-      <span class="pl">店名</span>
-      <span class="pc"><input class="rInp pick-in" data-f="店名" value="${sEsc(r['店名'] || '')}"
-        placeholder="${sEsc(r['寄送方式'] || '超商')}門市"></span>
-    </div>
+    ${String(r['寄送方式']) === SALES.HOME_DELIVERY
+      ? `<div class="pick-row">
+          <span class="pl">宅配地址</span>
+          <span class="pc"><input class="rInp pick-in" data-f="宅配地址"
+            value="${sEsc(r['宅配地址'] === SALES.NA ? '' : (r['宅配地址'] || ''))}"
+            placeholder="宅配要送到哪裡"></span>
+        </div>`
+      : `<div class="pick-row">
+          <span class="pl">店名</span>
+          <span class="pc"><input class="rInp pick-in" data-f="店名"
+            value="${sEsc(r['店名'] === SALES.NA ? '' : (r['店名'] || ''))}"
+            placeholder="${sEsc(r['寄送方式'] || '超商')}門市"></span>
+        </div>`}
     ${chips('寄件狀態', SALES.SHIP, r['寄件狀態'])}
     <div class="pick-row">
       <span class="pl">寄件代碼</span>
