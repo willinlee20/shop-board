@@ -18,7 +18,15 @@ const SALES = {
   LIST_SHEET: { staff: ['Sales業務同仁list', 'Sales業務同仁名單'], mini: '', dist: '' },
   LIST_SIG: { staff: '負責業務', mini: '小賣名稱', dist: '經銷商名稱' },
   /** 業務名單 C 欄的標題：填「是」的人才看得到業績報表 */
-  ADMIN_COL: '幹部',
+  /* 業務同仁名單 C 欄：職位。填什麼決定看得到什麼——
+       董事 → 業績分析看全部的人、可以發公告
+       店長 → 業績分析只看得到自己的業績和毛利，不能發公告
+       留空 → 看不到業績分析
+     v5.7 以前這一欄叫「幹部」、填「是」，那種舊資料一律當董事，不會突然沒權限。 */
+  ADMIN_COL: '職位',
+  ADMIN_COL_OLD: '幹部',
+  ROLE_FULL: '董事',
+  ROLE_SELF: '店長',
 
   // 網路單：前台只選收款方式，系統自己推結帳狀態
   COLLECT: ['已收貨款', '貨到付款'],
@@ -36,6 +44,7 @@ const SALES = {
   RET_TYPE: '退貨折讓',
   PAYWAY: ['現金', '匯款'],          // 來店單的收款方式，出納對帳用
   CLOSE_SHEET: 'DayClose日結',       // 每間門市每天「本日營業結束」的紀錄
+  NOTICE_SHEET: 'Notices公告',       // 主管發的公告（商品政策、注意事項…）
   // 網路單：這兩種情況不扣庫存（貨不是從我們倉庫出的）
   NOSTOCK: [
     { key: 'agent', label: '本訂單廠商代出（不扣庫存）', tag: '廠商代出' },
@@ -89,6 +98,12 @@ const SH_HEAD = {
 const CLOSE_HEAD = ['id', '門市', '營業日', '結束時間', '結束者',
                     '筆數', '金額', '成本', '現金', '匯款', '備註'];
 const CLOSE_LAST = 'K';
+/** 公告分頁：一則公告一列。狀態＝顯示／已收起（收起的只是不顯示，資料留著） */
+const NOTICE_HEAD = ['id', '建立時間', '建立者', '建立者Email', '標題', '內容',
+                     '置頂', '狀態', '最後修改時間', '最後修改者'];
+const NOTICE_LAST = 'J';
+const NOTICE_ON = '顯示';
+const NOTICE_OFF = '已收起';
 
 const SH_COL = {};                       // kind → {欄位: 索引}
 Object.keys(SH_HEAD).forEach(k => { SH_COL[k] = {}; SH_HEAD[k].forEach((h, i) => SH_COL[k][h] = i); });
@@ -101,6 +116,7 @@ const SALE = {
   titles: {},               // kind → 分頁名稱
   rows: { shop: [], online: [], mini: [], dist: [] },
   closes: [],               // 日結紀錄（每間門市每天一筆）
+  notices: [],              // 公告（主管發的，全部同仁都看得到）
   pickStage: null,          // 網路應收待結的階段篩選（null＝全部）
   lists: { staff: [], mini: [], dist: [] },
   form: null,
@@ -119,6 +135,7 @@ window.initSales = async function (sheets) {
     if (!titles.includes(t)) need.push(t);
   }
   if (!titles.includes(SALES.CLOSE_SHEET)) need.push(SALES.CLOSE_SHEET);
+  if (!titles.includes(SALES.NOTICE_SHEET)) need.push(SALES.NOTICE_SHEET);
   if (need.length) {
     await api(`${CONFIG.SPREADSHEET_ID}:batchUpdate`, {
       method: 'POST',
@@ -141,6 +158,13 @@ window.initSales = async function (sheets) {
       await writeRanges([{ range: `'${t}'!A1:${CLOSE_LAST}1`, values: [CLOSE_HEAD] }]);
     }
   }
+  {
+    const t = SALES.NOTICE_SHEET;
+    const hdr = (await readRange(t, `A1:${NOTICE_LAST}1`))[0] || [];
+    if (NOTICE_HEAD.some((h, i) => String(hdr[i] || '') !== h)) {
+      await writeRanges([{ range: `'${t}'!A1:${NOTICE_LAST}1`, values: [NOTICE_HEAD] }]);
+    }
+  }
 
   // 2) 名單分頁：掃每個分頁的標題列，用欄位特徵認人
   const ranges = titles.map(t => rangeOf(t, 'A1:E1')).map(r => 'ranges=' + r).join('&');
@@ -161,9 +185,13 @@ window.initSales = async function (sheets) {
     SALE.titles['list_' + key] = hit;
     // 業務名單的 C 欄是「幹部」旗標（業績報表看得到誰）。沒有標題就幫忙補一個，
     // 不然同事打開試算表會不知道那一欄要填什麼。原本有東西就不動。
-    if (key === 'staff' && !String((heads[hit] || [])[2] || '').trim()) {
-      try { await writeRanges([{ range: `'${hit}'!C1`, values: [[SALES.ADMIN_COL]] }]); }
-      catch (e) { console.warn('補「幹部」欄標題失敗', e); }
+    if (key === 'staff') {
+      const c1 = String((heads[hit] || [])[2] || '').trim();
+      // 空白就補上標題；舊的「幹部」自動改名成「職位」（填在裡面的值不動）
+      if (!c1 || c1 === SALES.ADMIN_COL_OLD) {
+        try { await writeRanges([{ range: `'${hit}'!C1`, values: [[SALES.ADMIN_COL]] }]); }
+        catch (e) { console.warn('補「職位」欄標題失敗', e); }
+      }
     }
     const rows = await readRange(hit, 'A2:F400');
     SALE.lists[key] = rows.filter(r => String(r[0] || '').trim()).map(r => ({
@@ -195,6 +223,13 @@ async function loadSales() {
     CLOSE_HEAD.forEach((h, ci) => o[h] = r[ci] ?? '');
     return o;
   }).filter(o => o.id && o['門市'] && o['營業日']);
+
+  const nr = await readRange(SALES.NOTICE_SHEET, `A2:${NOTICE_LAST}500`);
+  SALE.notices = nr.map((r, n) => {
+    const o = { _row: n + 2 };
+    NOTICE_HEAD.forEach((h, ci) => o[h] = r[ci] ?? '');
+    return o;
+  }).filter(o => o.id);
 }
 
 /* ----------------------------- 共用小工具 ------------------------------ */
@@ -327,7 +362,7 @@ window.onAfterRefresh = async () => {
   try { await loadSales(); renderPerf(); } catch (e) { console.warn('業績分析重算失敗', e); }
 };
 
-/** 「業績分析」分頁只有幹部看得到。名單是登入後才讀到的，所以要在這裡再同步一次 */
+/** 「業績分析」分頁只有董事和店長看得到。名單是登入後才讀到的，所以要在這裡再同步一次 */
 function syncPerfTab() {
   const t = $('perfTab');
   if (!t) return;
@@ -336,7 +371,7 @@ function syncPerfTab() {
   if (!ok && SALE.mode === 'perf') setMode('sales');
 }
 function setMode(m) {
-  // 非幹部就算想辦法切到業績分析，也一律退回銷售紀錄
+  // 職位欄沒填的人就算想辦法切到業績分析，也一律退回銷售紀錄
   if (m === 'perf' && !canSeePerf()) m = 'sales';
   SALE.mode = m;
   document.querySelectorAll('.mode-tab').forEach(x => x.classList.toggle('on', x.dataset.mode === m));
@@ -419,11 +454,149 @@ function renderSales() {
       ${recvBtn('online', '📦', '網路應收待結')}
       ${recvBtn('mini', '🛍️', '小賣應收待結')}
     </div>
+    ${noticeBoard()}
     <div class="sec-title">今日營業</div>
     ${todayPanel()}
     <div class="sec-title">今日銷售</div>
     ${todayBrief()}`;
   wireDayPanel();
+  wireNotices();
+}
+
+/* ----------------------------- 公告版 ---------------------------------- */
+/* 誰都看得到，只有董事發得了。公告存在 Notices公告 分頁，
+   收起來的只是狀態改成「已收起」，文字永遠留在試算表裡。 */
+
+/** 現在要顯示的公告：置頂的排前面，再來照建立時間新到舊 */
+function liveNotices() {
+  return (SALE.notices || [])
+    .filter(x => String(x['狀態'] || NOTICE_ON) !== NOTICE_OFF)
+    .sort((a, b) => (isTop(b) - isTop(a))
+      || String(b['建立時間'] || '').localeCompare(String(a['建立時間'] || '')));
+}
+const isTop = x => ADMIN_YES.includes(String(x['置頂'] || '').trim().toUpperCase());
+
+function noticeBoard() {
+  const list = liveNotices(), post = canPost();
+  if (!list.length && !post) return '';          // 沒公告又不能發 → 整塊不佔版面
+  return `<div class="sec-title">公告
+      ${post ? `<button class="btn btn-sm btn-primary bulk" data-ntnew="1">＋ 發公告</button>` : ''}</div>
+    ${list.length
+      ? `<div class="nt-list">${list.map(x => noticeCard(x, post)).join('')}</div>`
+      : `<div class="empty">目前沒有公告</div>`}`;
+}
+
+function noticeCard(x, post) {
+  const top = isTop(x);
+  return `<div class="nt-card${top ? ' top' : ''}" data-ntid="${sEsc(x.id)}">
+    <div class="nt-head">
+      ${top ? '<span class="nt-pin">📌 置頂</span>' : ''}
+      <span class="nt-title">${sEsc(x['標題'] || '（無標題）')}</span>
+    </div>
+    <div class="nt-body">${sEsc(x['內容'] || '')}</div>
+    <div class="nt-foot">
+      <span class="nt-by">${sEsc(x['建立者'] || '')}　${sEsc(x['建立時間'] || '')}
+        ${x['最後修改時間'] ? `　·　✎ ${sEsc(x['最後修改者'] || '')} ${sEsc(x['最後修改時間'])}` : ''}</span>
+      ${post ? `<span class="nt-act">
+        <button class="btn btn-sm" data-ntedit="1">✎ 修改</button>
+        <button class="btn btn-sm" data-nthide="1">✓ 收起</button></span>` : ''}
+    </div></div>`;
+}
+
+function wireNotices() {
+  const nb = document.querySelector('#salesView [data-ntnew]');
+  if (nb) nb.onclick = () => openNoticeForm(null);
+  document.querySelectorAll('#salesView .nt-card[data-ntid]').forEach(card => {
+    const x = (SALE.notices || []).find(n => n.id === card.dataset.ntid);
+    if (!x) return;
+    const ed = card.querySelector('[data-ntedit]');
+    if (ed) ed.onclick = () => openNoticeForm(x);
+    const hd = card.querySelector('[data-nthide]');
+    if (hd) hd.onclick = () => hideNotice(x);
+  });
+}
+
+/** 發新公告 / 改舊公告。只有董事叫得動——按鈕本來就只畫給董事看，這裡再擋一次 */
+function openNoticeForm(x) {
+  if (!canPost()) return alert('只有職位填「' + SALES.ROLE_FULL + '」的人可以發公告。');
+  const host = $('modalHost');
+  host.innerHTML = `<div class="modal"><div class="sheet" style="max-width:520px">
+      <div class="sheet-head"><h2>${x ? '修改公告' : '發新公告'}</h2>
+        <button class="btn btn-ghost" id="ntClose">✕</button></div>
+      <div class="sheet-body">
+        <div class="field"><label>標題 <span class="req">*</span></label>
+          <input type="text" id="ntTitle" value="${sEsc((x && x['標題']) || '')}"
+            placeholder="例如：12 月起 IQOS 菸彈調價"></div>
+        <div class="field"><label>內容 <span class="req">*</span></label>
+          <textarea id="ntBody" rows="6" placeholder="商品政策、注意事項、交代給同仁的事">${sEsc((x && x['內容']) || '')}</textarea></div>
+        <div class="field">
+          <label class="check-inline${x && isTop(x) ? ' on' : ''}">
+            <input type="checkbox" id="ntTop" ${x && isTop(x) ? 'checked' : ''}>📌 置頂（排在最前面）</label>
+        </div>
+        <div class="hint-row">公告全部同仁都看得到，收起之後文字還是留在試算表的「${sEsc(SALES.NOTICE_SHEET)}」分頁。</div>
+      </div>
+      <div class="sheet-foot">
+        <button class="btn" id="ntCancel">取消</button>
+        <button class="btn btn-primary" id="ntSave">${x ? '儲存修改' : '發布公告'}</button>
+      </div></div></div>`;
+  const close = () => { host.innerHTML = ''; };
+  $('ntClose').onclick = $('ntCancel').onclick = close;
+  $('ntTop').onchange = e => e.target.closest('.check-inline').classList.toggle('on', e.target.checked);
+  $('ntSave').onclick = async () => {
+    const title = $('ntTitle').value.trim(), body = $('ntBody').value.trim();
+    if (!title) return alert('請填標題');
+    if (!body) return alert('請填內容');
+    const top = $('ntTop').checked ? '是' : '';
+    const btn = $('ntSave');
+    btn.disabled = true; btn.textContent = '儲存中…';
+    try {
+      if (x) {
+        await patchNotice(x, { 標題: title, 內容: body, 置頂: top,
+          最後修改時間: nowStr(), 最後修改者: userName() });
+      } else {
+        const v = new Array(NOTICE_HEAD.length).fill('');
+        const set = (k, val) => { const i = NOTICE_HEAD.indexOf(k); if (i >= 0) v[i] = val; };
+        set('id', 'N' + Date.now().toString(36).toUpperCase());
+        set('建立時間', nowStr()); set('建立者', userName()); set('建立者Email', userEmail());
+        set('標題', title); set('內容', body); set('置頂', top); set('狀態', NOTICE_ON);
+        await appendRow(SALES.NOTICE_SHEET, v);
+      }
+      close();
+      await loadSales(); renderSales();
+      toast(x ? '公告已更新' : '公告已發布', 'ok');
+    } catch (err) {
+      alert('儲存失敗：\n\n' + err.message);
+      btn.disabled = false; btn.textContent = x ? '儲存修改' : '發布公告';
+    }
+  };
+}
+
+/** 改公告那一列的某幾個欄位 */
+async function patchNotice(x, patch) {
+  const data = Object.keys(patch).map(k => {
+    const i = NOTICE_HEAD.indexOf(k);
+    if (i < 0) return null;
+    return { range: `'${SALES.NOTICE_SHEET}'!${colLetter(i)}${x._row}`, values: [[patch[k]]] };
+  }).filter(Boolean);
+  if (data.length) await writeRanges(data);
+}
+
+async function hideNotice(x) {
+  if (!canPost()) return;
+  const ok = await confirmModal({
+    title: '收起這則公告？',
+    lines: `<p><b>${sEsc(x['標題'] || '（無標題）')}</b></p>
+      <pre class="pre">${esc(String(x['內容'] || '').slice(0, 300))}</pre>
+      <div class="alert-box">收起後<b>同仁就看不到了</b>，但文字還留在試算表的
+        「${sEsc(SALES.NOTICE_SHEET)}」分頁，要的話可以把「狀態」改回「${NOTICE_ON}」叫回來。</div>`,
+    okText: '確定，收起'
+  });
+  if (!ok) return;
+  try {
+    await patchNotice(x, { 狀態: NOTICE_OFF, 最後修改時間: nowStr(), 最後修改者: userName() });
+    await loadSales(); renderSales();
+    toast('公告已收起', 'ok');
+  } catch (err) { alert('失敗：\n' + err.message); }
 }
 
 /** 今天（只有今天）開的每一張單，逐筆列出 */
@@ -2565,13 +2738,35 @@ async function patchSale(kind, r, patch) {
    自己也算得出來。真正的門鎖是**試算表的共用名單**。            ---- */
 const ADMIN_YES = ['是', 'Y', 'YES', 'TRUE', '✓', 'V', '1', 'O'];
 const isAdminFlag = v => ADMIN_YES.includes(String(v || '').trim().toUpperCase());
-/** 這個登入帳號看得到業績報表嗎。查不到人、沒勾的一律看不到（寧可擋錯也不要漏看） */
-function canSeePerf() {
-  const mail = String((S.user && S.user.email) || '').trim().toLowerCase();
-  if (!mail) return false;
-  return (SALE.lists.staff || []).some(x =>
-    isAdminFlag(x.c) && String(x.contact || '').trim().toLowerCase() === mail);
+
+/**
+ * 名單上這一列的職位是什麼：'full'（董事）／'self'（店長）／''（都不是）。
+ * 舊資料「幹部」欄填是／Y／TRUE 的一律當董事——改標題的時候不能讓人突然沒權限。
+ */
+function roleOf(x) {
+  const v = String((x && x.c) || '').trim();
+  if (!v) return '';
+  if (v === SALES.ROLE_FULL) return 'full';
+  if (v === SALES.ROLE_SELF) return 'self';
+  return isAdminFlag(v) ? 'full' : '';
 }
+/** 現在登入的人在名單上的那一列（查不到回 null） */
+function myStaffRow() {
+  const mail = String((S.user && S.user.email) || '').trim().toLowerCase();
+  if (!mail) return null;
+  return (SALE.lists.staff || []).find(x =>
+    String(x.contact || '').trim().toLowerCase() === mail) || null;
+}
+/** 現在登入的人的職位 */
+const myRole = () => roleOf(myStaffRow());
+/** 名單上登記的名字（業績要比對這個，不是 Google 顯示名稱） */
+const myStaffName = () => String((myStaffRow() || {}).name || '').trim();
+/** 看得到業績分析嗎（董事和店長都看得到，只是看到的範圍不一樣） */
+const canSeePerf = () => !!myRole();
+/** 看得到全部人的業績嗎（只有董事）；店長只看自己 */
+const canSeeAll = () => myRole() === 'full';
+/** 可以發公告、改公告、收公告嗎——只有董事 */
+const canPost = () => myRole() === 'full';
 
 /** 這幾個不是人，是記帳用的分類。排在業務排行榜下面，不混在一起比 */
 const NON_STAFF = ['公關品', '員購', '新客來店'];
@@ -2673,8 +2868,14 @@ function renderPerf() {
   const m = SALE.perfMonth, kind = SALE.perfKind;
   const kLabel = kind === 'all' ? '全部通道' : SALES.LABEL[kind];
 
+  /* 店長只看得到自己：先把名單濾成自己那一個人，後面所有數字
+     （合計、排行、通道鈕、上個月）就都只剩自己的，不用一處一處擋。 */
+  const seeAll = canSeeAll();
+  const meName = myStaffName();
+  const mine = list => seeAll ? list : list.filter(e => String(e.who).trim() === meName);
+
   // 選了某個通道就只看那個通道的數字，那個通道沒單的人不列出來
-  const pickAll = list => list.map(e => perfPick(e, kind)).filter(e => e.n > 0);
+  const pickAll = list => mine(list).map(e => perfPick(e, kind)).filter(e => e.n > 0);
   const all = pickAll([...data.get(m).values()]);
   const staff = all.filter(e => !isNonStaff(e.who)).sort((a, b) => b.rev - a.rev);
   const other = all.filter(e => isNonStaff(e.who)).sort((a, b) => b.rev - a.rev);
@@ -2690,7 +2891,7 @@ function renderPerf() {
   /* 通道鈕上直接帶當月金額，不用一個一個點進去看。
      這裡一律算「業務」的（不含公關品／員購／新客來店），
      不然按鈕上的數字跟排行榜的合計會對不起來。 */
-  const monthRows = [...data.get(m).values()].filter(e => !isNonStaff(e.who));
+  const monthRows = mine([...data.get(m).values()]).filter(e => !isNonStaff(e.who));
   const allTot = sumRows(monthRows);
   const byKind = Object.fromEntries(PERF_KINDS.map(k =>
     [k, sumRows(monthRows.map(e => e.by[k]))]));
@@ -2702,7 +2903,9 @@ function renderPerf() {
 
   host.innerHTML = `
     <div class="pf-head"><h2>業績分析</h2>
-      <span class="pf-tag">🔒 只有幹部看得到</span></div>
+      <span class="pf-tag">🔒 ${seeAll ? '董事：看全部' : '店長：只看自己'}</span></div>
+    ${seeAll ? '' : `<div class="hint-row" style="margin:-4px 0 10px">
+      這一頁只顯示<b>${sEsc(meName || '你')}</b>的業績，其他同仁的數字看不到。</div>`}
     <div class="pf-months">${months.slice(0, 18).map(x =>
       `<button class="pf-m${x === m ? ' on' : ''}" data-pm="${sEsc(x)}">${sEsc(x.replace('-', ' / '))}</button>`).join('')}</div>
     ${kindBar}
@@ -2723,14 +2926,15 @@ function renderPerf() {
         <i>${pct(x.rev, allTot.rev)}%　毛利 ${pfMoney(g)}　${x.n} 單</i></div>`;
     }).join('')}</div>` : ''}
 
-    <div class="sec-title">業務排行（依業績${kind === 'all' ? '' : '：' + sEsc(kLabel)}）</div>
+    <div class="sec-title">${seeAll ? '業務排行（依業績' + (kind === 'all' ? '' : '：' + sEsc(kLabel)) + '）'
+      : '我的業績明細' + (kind === 'all' ? '' : '：' + sEsc(kLabel))}</div>
     ${staff.length ? perfTable(staff, best) : `<div class="empty">這個月沒有${sEsc(kLabel)}的單</div>`}
 
-    ${other.length ? `<div class="sec-title">非業務（記帳分類，不列入排行）</div>
+    ${seeAll && other.length ? `<div class="sec-title">非業務（記帳分類，不列入排行）</div>
       ${perfTable(other, best)}
       <div class="hint-row" style="margin-top:-2px">公關品、員購這類單有成本沒有相對的營收，<b>毛利會是負的</b>，那是正常的。</div>` : ''}
 
-    ${staff.some(e => !knownStaff(e.who)) ? `<div class="warn-box" style="margin-top:14px">
+    ${seeAll && staff.some(e => !knownStaff(e.who)) ? `<div class="warn-box" style="margin-top:14px">
       ⚠ 有 <b>${staff.filter(e => !knownStaff(e.who)).map(e => sEsc(e.who)).join('、')}</b>
       不在「Sales業務同仁list」上。<br>
       <span style="font-weight:400;font-size:13px">多半是 v4.4 以前把 Google 帳號的顯示名稱寫進去了（例如 Mini Hsu 其實是小美），

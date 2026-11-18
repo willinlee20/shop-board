@@ -5,8 +5,8 @@
    ========================================================================= */
 
 /* ----------------------------- 版本 ------------------------------------ */
-const APP_VERSION = '5.6';          // 每次改版都會更新，畫面右上角看得到
-const APP_DATE = '2026-11-18';
+const APP_VERSION = '5.7';          // 每次改版都會更新，畫面右上角看得到
+const APP_DATE = '2026-11-22';
 
 /* ----------------------------- 設定區 -----------------------------------
    要改的東西都在這裡，下面的程式不用動。
@@ -2434,6 +2434,48 @@ async function createCompanionStockup(orderId, whItems) {
 }
 
 /* ----------------------------- 事件綁定 -------------------------------- */
+/* ----------------------------- 3D Tilt --------------------------------- */
+/**
+ * 方塊按鈕跟著滑鼠微微傾斜。
+ * 用事件代理掛在 document 上，所以畫面重畫幾次都不用重新綁，也不會累積監聽器。
+ * 只認 .tilt 這個 class，CSS 那邊用 --rx / --ry 兩個變數畫出來。
+ */
+const TILT_MAX = 6;                // 最大傾斜角度（度）。想更明顯就調大
+const TILT_SEL = '.pos-btn, .pf-k, .stage-bar .stg';
+(function initTilt() {
+  // 沒有滑鼠的裝置（手機平板）不做傾斜，使用者說要減少動態效果也不做
+  if (!window.matchMedia) return;
+  if (!matchMedia('(hover:hover) and (pointer:fine)').matches) return;
+  if (matchMedia('(prefers-reduced-motion:reduce)').matches) return;
+
+  let cur = null;
+  const clear = el => {
+    if (!el) return;
+    el.style.removeProperty('--rx');
+    el.style.removeProperty('--ry');
+    el.classList.remove('is-tilting');
+  };
+  document.addEventListener('pointermove', e => {
+    if (e.pointerType && e.pointerType !== 'mouse') return;
+    const el = e.target.closest && e.target.closest(TILT_SEL);
+    if (el !== cur) { clear(cur); cur = el; if (el) el.classList.add('is-tilting'); }
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    // −0.5 ~ +0.5：游標在方塊裡的相對位置
+    const dx = (e.clientX - r.left) / r.width - 0.5;
+    const dy = (e.clientY - r.top) / r.height - 0.5;
+    el.style.setProperty('--ry', (dx * TILT_MAX * 2).toFixed(2) + 'deg');
+    el.style.setProperty('--rx', (-dy * TILT_MAX * 2).toFixed(2) + 'deg');
+  }, { passive: true });
+  // 滑出視窗、捲動、按下去都要歸位，不然按鈕會卡在斜的
+  const reset = () => { clear(cur); cur = null; };
+  document.addEventListener('pointerleave', reset, { passive: true });
+  document.addEventListener('pointerdown', reset, { passive: true });
+  window.addEventListener('blur', reset);
+  window.addEventListener('scroll', reset, { passive: true });
+})();
+
 window.addEventListener('DOMContentLoaded', () => {
   $('loginBtn').disabled = true;
   $('loginBtn').onclick = login;

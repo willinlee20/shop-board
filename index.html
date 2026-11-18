@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="5.6">
+<meta name="app-version" content="5.7">
 <title>西門龍門儀錶板</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -313,11 +313,32 @@ textarea{min-height:84px;resize:vertical}
   transition:.15s;display:flex;flex-direction:column;align-items:center;gap:6px;min-height:96px;
   justify-content:center;color:var(--ink);
 }
-.pos-btn:hover{border-color:var(--brand);transform:translateY(-1px)}
+.pos-btn:hover{border-color:var(--brand)}
 .pos-btn .ico{font-size:26px;line-height:1}
 .pos-btn .sub{font-size:12px;font-weight:400;color:var(--ink-3)}
 .pos-btn.primary{background:var(--brand);border-color:var(--brand);color:#fff}
 .pos-btn.primary:hover{background:#1a44bd}
+
+/* ---------- 3D Tilt：方塊按鈕跟著滑鼠微微傾斜 ----------
+   角度由 JS 寫進 --rx / --ry（最多 6 度），沒有滑鼠的裝置就是 0，
+   手機改用按下去縮一點的回饋。喜歡大一點就改 app.js 的 TILT_MAX。 */
+.pos-btn,.pf-k,.stage-bar .stg{
+  transform:perspective(620px) rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg))
+    translateY(var(--ty,0)) scale(var(--sc,1));
+  transition:transform .18s cubic-bezier(.2,.7,.3,1), border-color .15s, background .15s, box-shadow .18s;
+  will-change:transform;
+}
+/* 滑鼠在上面移動的時候要跟得緊，離開才用慢一點的回彈 */
+.pos-btn.is-tilting,.pf-k.is-tilting,.stage-bar .stg.is-tilting{
+  transition:transform .06s linear, border-color .15s, background .15s, box-shadow .18s}
+@media (hover:hover){
+  .pos-btn:hover,.pf-k:hover,.stage-bar .stg:hover{--ty:-2px;box-shadow:0 10px 22px rgba(15,23,42,.10)}
+}
+/* 手機沒有滑鼠，按下去縮一點當回饋 */
+.pos-btn:active,.pf-k:active,.stage-bar .stg:active{--sc:.975;--rx:0deg;--ry:0deg;--ty:0}
+@media (prefers-reduced-motion:reduce){
+  .pos-btn,.pf-k,.stage-bar .stg{transform:none;transition:border-color .15s,background .15s}
+}
 .pos-btn.primary .sub{color:#c7d6fb}
 .pos-btn .badge{
   background:var(--bad);color:#fff;border-radius:999px;font-size:12px;padding:1px 9px;font-weight:700;
@@ -517,6 +538,22 @@ textarea{min-height:84px;resize:vertical}
 .dead-sum .lb i{display:block;font-style:normal;font-weight:400;font-size:11px;color:var(--ink-3)}
 .dead-sum .n{margin-left:auto;font-size:12.5px;color:var(--ink-2)}
 .sec-title .bulk{float:right;margin-top:-5px;letter-spacing:0;font-weight:700}
+
+/* ---------- 公告版 ---------- */
+.nt-list{display:flex;flex-direction:column;gap:10px;margin-bottom:18px}
+.nt-card{background:#fff;border:1px solid var(--line);border-radius:14px;
+  padding:13px 15px;box-shadow:var(--shadow)}
+.nt-card.top{border-color:#fcd34d;background:#fffbeb}
+.nt-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px}
+.nt-pin{font-size:11.5px;font-weight:700;color:#92400e;background:#fde68a;
+  border-radius:999px;padding:2px 9px;white-space:nowrap}
+.nt-title{font-size:15.5px;font-weight:800;color:var(--ink);overflow-wrap:anywhere}
+.nt-body{font-size:14px;color:var(--ink-2);line-height:1.65;white-space:pre-wrap;
+  overflow-wrap:anywhere;margin-bottom:8px}
+.nt-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  border-top:1px dashed var(--line);padding-top:8px}
+.nt-by{flex:1 1 auto;font-size:11.5px;color:var(--ink-3)}
+.nt-act{flex:0 0 auto;display:flex;gap:6px}
 .stage-bar .stg b.sm{flex:1 1 100%;font-size:11.5px;font-weight:700;color:var(--ink-2);
   font-variant-numeric:tabular-nums}
 .stage-bar .stg.on b.sm{color:var(--brand)}
@@ -848,7 +885,7 @@ textarea{min-height:84px;resize:vertical}
 <div id="toastHost"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="app.js?v=5.6"></script>
-<script src="sales.js?v=5.6"></script>
+<script src="app.js?v=5.7"></script>
+<script src="sales.js?v=5.7"></script>
 </body>
 </html>
