@@ -55,6 +55,9 @@ const SALES = {
   GIFT: ['保固換貨', '點數換贈', '公關贈品'],
   // 小賣／經銷：客人自己給寄件代號，我們只要把代號記下來就好
   CODE_WAY: '收件者提供寄件代號',
+  /* 店外面交：約在店外面把貨交給客人。三種單別都有，欄位也共用一套
+     （面交地址／面交時間／面交聯繫人／面交電話），不跟宅配地址、收貨人混在一起。 */
+  MEETUP: '店外面交',
 
   // SHIP[0]=未寄出、SHIP[1]=已寄出（程式到處用索引，新的只能往後加）
   SHIP:   ['未寄出', '已寄出', '訂單已作廢'],
@@ -84,15 +87,18 @@ const SH_HEAD = {
            '收款方式', '寄送方式', '店名',
            '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '備註',
            '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態', '庫存狀態',
-           '折扣', '未折金額', '會計確認', '會計確認者', '補差價', '宅配地址'],
+           '折扣', '未折金額', '會計確認', '會計確認者', '補差價', '宅配地址',
+           '面交地址', '面交時間', '面交聯繫人', '面交電話'],
   mini: ['id', '訂單日期', '建立時間', '建立者', '銷售小賣', '客戶名稱', '小賣自取', '電話', '取貨方式',
          '訂單內容', '價格', '運費', '成本', '寄送方式', '店名',
          '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '獎金', '備註',
-         '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態', '應收貨款', '庫存狀態', '收款方式'],
+         '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態', '應收貨款', '庫存狀態', '收款方式',
+         '面交地址', '面交時間', '面交聯繫人', '面交電話'],
   dist: ['id', '訂單日期', '建立時間', '建立者', '經銷名稱', '經銷聯絡電話', '訂單內容', '價格', '運費', '成本',
          '寄送方式', '收貨門市', '收貨人', '收貨人電話',
          '寄件狀態', '取貨狀態', '寄件代碼', '結帳狀態', '結帳日', '負責業務', '備註',
-         '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態', '宅配地址', '庫存狀態']
+         '品項JSON', '庫存異動JSON', '結帳確認者', '封存', '狀態', '宅配地址', '庫存狀態',
+         '面交地址', '面交時間', '面交聯繫人', '面交電話']
 };
 /** 日結分頁：一間門市一天一列 */
 const CLOSE_HEAD = ['id', '門市', '營業日', '結束時間', '結束者',
@@ -726,6 +732,7 @@ function openSaleForm(kind) {
     onSrc: CONFIG.H.warehouse,         // 網路單從哪裡出貨（總倉／三重店／西門店）
     miniName: (SALE.lists.mini[0] || {}).name || '', selfPick: false, pickup: SALES.PICKUP[0], restock: false,
     sendWay: SALES.SEND_WAY[0], storeName: '', shipCode: '',
+    meetAddr: '', meetAt: '', meetName: '', meetTel: '',   // 店外面交
     distName: (SALE.lists.dist[0] || {}).name || '', distTel: '',
     dSendWay: SALES.DIST_SEND_WAY[0], useDefault: true, rShop: '', rAddr: '', rName: '', rTel: '',
     editRow: null
@@ -791,15 +798,150 @@ function isBackfill() {
 /* ---- 收件者提供寄件代號 -------------------------------------------------
    小賣／經銷有時候是客人自己開寄件單，把代號給我們。
    這種情況沒有「我們要寄到哪家店」，只要把代號記下來就好。            */
-const miniWays = () => SALES.SEND_WAY.concat(SALES.CODE_WAY);
-const distWays = () => SALES.DIST_SEND_WAY.concat(SALES.CODE_WAY);
+/* 三種單別的寄送方式：各自的清單 ＋ 共用的「店外面交」「收件者提供寄件代號」 */
+const EXTRA_WAYS = () => [SALES.MEETUP, SALES.CODE_WAY];
+const onlineWays = () => SALES.ON_SEND_WAY.concat(EXTRA_WAYS());
+const miniWays = () => SALES.SEND_WAY.concat(EXTRA_WAYS());
+const distWays = () => SALES.DIST_SEND_WAY.concat(EXTRA_WAYS());
 const byCode = w => String(w) === SALES.CODE_WAY;
+/** 這張單是不是店外面交 */
+const byMeet = w => String(w) === SALES.MEETUP;
 /** 寄件代號欄位（選了「收件者提供寄件代號」才會出現） */
 function codeField() {
   const f = SALE.form;
   return `<div class="field"><label>寄件代號 <span class="req">*</span></label>
     <input type="text" id="fShipCode" value="${sEsc(f.shipCode || '')}" placeholder="客人給的寄件代號／寄件編號">
     <div class="hint-row">客人自己開的寄件單，代號填這裡就好，不用填店名、收貨門市或地址</div></div>`;
+}
+
+/* ---------------------------- 店外面交 --------------------------------- */
+/**
+ * Google 日曆連結。
+ * 用的是 Google 的「新增活動」網址，點下去會開一個**already填好**的建立活動畫面，
+ * 按不按儲存由人決定。好處是**不需要任何額外授權**——不用加日曆權限、
+ * 不用重新登入，手機電腦都開得起來。
+ * 時間格式是 UTC 的 YYYYMMDDTHHMMSSZ，預設抓一小時。
+ */
+function gcalLink({ title, start, mins, where, detail }) {
+  if (!start) return '';
+  const d = new Date(start);
+  if (isNaN(d)) return '';
+  const end = new Date(d.getTime() + (mins || 60) * 60000);
+  const z = x => x.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const q = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: title || '店外面交',
+    dates: `${z(d)}/${z(end)}`,
+    location: where || '',
+    details: detail || ''
+  });
+  return 'https://calendar.google.com/calendar/render?' + q.toString();
+}
+
+/** 把表單上的面交資料組成日曆連結要的東西 */
+function meetCal(f, who) {
+  return gcalLink({
+    title: `店外面交　${who || ''}`.trim(),
+    start: f.meetAt,
+    where: f.meetAddr,
+    detail: [f.meetName ? '聯繫人：' + f.meetName : '',
+             f.meetTel ? '電話：' + f.meetTel : '',
+             f.meetAddr ? '地址：' + f.meetAddr : ''].filter(Boolean).join('\n')
+  });
+}
+
+/** 選了「店外面交」才出現的那一組欄位 */
+function meetupFields(who) {
+  const f = SALE.form;
+  const link = meetCal(f, who);
+  return `<div class="field meet-box">
+    <label>店外面交資訊 <span class="req">*</span></label>
+    <div class="meet-grid">
+      <div class="wide"><label>地址 <span class="req">*</span></label>
+        <input type="text" id="fMeetAddr" value="${sEsc(f.meetAddr || '')}"
+          placeholder="約在哪裡交貨，例如：台北市中山區○○路 1 號 7-11 門口"></div>
+      <div><label>時間</label>
+        <input type="datetime-local" id="fMeetAt" value="${sEsc(f.meetAt || '')}"></div>
+      <div><label>聯繫人</label>
+        <input type="text" id="fMeetName" value="${sEsc(f.meetName || '')}" placeholder="到場的人"></div>
+      <div><label>電話</label>${telIn('fMeetTel', f.meetTel || '')}</div>
+    </div>
+    ${link
+      ? `<a class="btn btn-sm cal-btn" id="fMeetCal" href="${sEsc(link)}" target="_blank" rel="noopener">
+           📅 加到 Google 日曆</a>
+         <div class="hint-row">會開一個<b>已經填好</b>的 Google 日曆建立活動畫面，按不按儲存由你決定。
+           不需要額外授權，手機電腦都可以。預設抓一小時。</div>`
+      : `<div class="hint-row">填了<b>時間</b>之後，這裡會出現「加到 Google 日曆」的按鈕。</div>`}
+  </div>`;
+}
+
+/**
+ * 面交欄位改了之後，只更新日曆連結，不重畫整個表單——
+ * 重畫會讓正在打字的輸入框失焦，打兩個字就被踢出去。
+ */
+function refreshMeetCal() {
+  const f = SALE.form;
+  if (!f) return;
+  const who = f.kind === 'dist' ? f.distName : (f.cName || f.miniName);
+  const link = meetCal(f, who);
+  const a = $('fMeetCal');
+  if (a) {
+    if (link) a.href = link;
+    else renderSaleBody();          // 時間被清空了 → 按鈕要收起來
+    return;
+  }
+  if (link) renderSaleBody();       // 剛填上時間 → 把按鈕畫出來
+}
+
+/** 已存檔那一列的面交資訊（卡片上顯示用）。沒選面交就回空字串 */
+function meetLine(r) {
+  if (!byMeet(r['寄送方式'])) return '';
+  const un = v => (String(v || '') === SALES.NA ? '' : String(v || '').trim());
+  const addr = un(r['面交地址']), at = un(r['面交時間']),
+        who = un(r['面交聯繫人']), tel = un(r['面交電話']);
+  if (!addr && !at && !who && !tel) return '';
+  const link = gcalLink({
+    title: '店外面交　' + (r['客戶名稱'] || r['經銷名稱'] || r['銷售小賣'] || ''),
+    start: at.replace(' ', 'T'), where: addr,
+    detail: [who ? '聯繫人：' + who : '', tel ? '電話：' + tel : '',
+             addr ? '地址：' + addr : ''].filter(Boolean).join('\n')
+  });
+  return `<div class="meet-line">
+    <span class="mt-tag">🤝 ${sEsc(SALES.MEETUP)}</span>
+    ${at ? `<span class="mt-at">${sEsc(at)}</span>` : ''}
+    ${addr ? `<span class="mt-row">地址：${sEsc(addr)}</span>` : ''}
+    ${who || tel ? `<span class="mt-row">聯繫人：${sEsc(who || '—')}${tel ? '　' + sEsc(tel) : ''}</span>` : ''}
+    ${link ? `<a class="btn btn-sm cal-btn" href="${sEsc(link)}" target="_blank" rel="noopener">📅 加到 Google 日曆</a>` : ''}
+  </div>`;
+}
+
+/** 改單時面交四欄的 patch（沒選面交就寫 N/A） */
+function meetPatch(on) {
+  const f = SALE.form, na = SALES.NA;
+  return {
+    面交地址: on ? String(f.meetAddr || '').trim() : na,
+    面交時間: on ? String(f.meetAt || '').replace('T', ' ') : na,
+    面交聯繫人: on ? String(f.meetName || '').trim() : na,
+    面交電話: on ? String(f.meetTel || '').trim() : na
+  };
+}
+
+/** 面交四欄的修改比對（三種單別共用） */
+function cmpMeet(cmp, r) {
+  const f = SALE.form;
+  cmp('面交地址', r['面交地址'], String(f.meetAddr || '').trim());
+  cmp('面交時間', r['面交時間'], String(f.meetAt || '').replace('T', ' '));
+  cmp('面交聯繫人', r['面交聯繫人'], String(f.meetName || '').trim());
+  cmp('面交電話', r['面交電話'], String(f.meetTel || '').trim());
+}
+
+/** 面交那四欄一次寫好；沒選店外面交就全部存 N/A，看起來才不像漏填 */
+function setMeet(set, on, na) {
+  const f = SALE.form;
+  set('面交地址', on ? String(f.meetAddr || '').trim() : na);
+  set('面交時間', on ? String(f.meetAt || '').replace('T', ' ') : na);
+  set('面交聯繫人', on ? String(f.meetName || '').trim() : na);
+  set('面交電話', on ? String(f.meetTel || '').trim() : na);
 }
 
 /** 小賣店取（三重店取／西門店取）→ 那間門市的名稱；寄送回空字串 */
@@ -947,9 +1089,11 @@ function renderSaleBody() {
       + itemsBlock() + noStockBlock()
       + `<div class="field"><label>寄送方式 <span class="req">*</span></label>
           <div class="chips big-chips" id="wayChips">
-            ${SALES.ON_SEND_WAY.map(w => `<button class="chip${w === f.sendWay ? ' on' : ''}" data-way="${w}">${w}</button>`).join('')}
+            ${onlineWays().map(w => `<button class="chip${w === f.sendWay ? ' on' : ''}" data-way="${w}">${w}</button>`).join('')}
           </div></div>
-        ${f.sendWay === SALES.HOME_DELIVERY
+        ${byMeet(f.sendWay) ? meetupFields(f.cName)
+          : byCode(f.sendWay) ? codeField()
+          : f.sendWay === SALES.HOME_DELIVERY
           ? `<div class="field"><label>宅配地址 <span class="req">*</span></label>
               <input type="text" id="fRAddr" value="${sEsc(f.rAddr)}" placeholder="例如：桃園市中壢區○○路 123 號 5 樓"></div>`
           : `<div class="field"><label>店名</label>
@@ -996,7 +1140,8 @@ function renderSaleBody() {
           <div class="chips big-chips" id="wayChips">
             ${miniWays().map(w => `<button class="chip${w === f.sendWay ? ' on' : ''}" data-way="${w}">${w}</button>`).join('')}
           </div></div>
-        ${byCode(f.sendWay) ? codeField()
+        ${byMeet(f.sendWay) ? meetupFields(f.cName || f.miniName)
+          : byCode(f.sendWay) ? codeField()
           : `<div class="field"><label>店名</label><input type="text" id="fStoreName" value="${sEsc(f.storeName)}"></div>`}
         ${feeField}` : '')
       + bonusBlock() + miniCollectField + staffField + noteField;
@@ -1011,17 +1156,19 @@ function renderSaleBody() {
           <div class="chips big-chips" id="dwayChips">
             ${distWays().map(w => `<button class="chip${w === f.dSendWay ? ' on' : ''}" data-dway="${w}">${w}</button>`).join('')}
           </div></div>
-        ${byCode(f.dSendWay) ? '' : `<div class="field">
+        ${byCode(f.dSendWay) || byMeet(f.dSendWay) ? '' : `<div class="field">
           <label class="check-inline${f.useDefault ? ' on' : ''}"><input type="checkbox" id="fUseDef" ${f.useDefault ? 'checked' : ''}>使用預設收件資料</label>
         </div>`}
-        ${byCode(f.dSendWay)
+        ${byMeet(f.dSendWay) ? meetupFields(f.distName)
+          : byCode(f.dSendWay)
           ? codeField()
           : f.dSendWay === SALES.HOME_DELIVERY
             ? `<div class="field"><label>宅配地址 <span class="req">*</span></label>
                 <input type="text" id="fRAddr" value="${sEsc(f.rAddr)}" placeholder="例如：桃園市中壢區○○路 123 號 5 樓"></div>`
             : `<div class="field"><label>收貨門市</label><input type="text" id="fRShop" value="${sEsc(f.rShop)}"></div>`}
-        <div class="field"><label>收貨人</label><input type="text" id="fRName" value="${sEsc(f.rName)}"></div>
-        <div class="field"><label>收貨人電話</label>${telIn('fRTel', f.rTel)}</div>`
+        ${byMeet(f.dSendWay) ? ''      /* 面交已經有聯繫人和電話了，不要再問一次 */
+          : `<div class="field"><label>收貨人</label><input type="text" id="fRName" value="${sEsc(f.rName)}"></div>
+             <div class="field"><label>收貨人電話</label>${telIn('fRTel', f.rTel)}</div>`}`
       + feeField + payFields + staffField + noteField;
   }
 
@@ -1104,6 +1251,11 @@ function wireSaleBody() {
   on('fPayDate', 'oninput', e => f.payDate = e.target.value);
   on('fStoreName', 'oninput', e => f.storeName = e.target.value);
   on('fShipCode', 'oninput', e => f.shipCode = e.target.value);
+  // 面交：地址和時間會影響日曆按鈕，所以改完要重畫；姓名電話只要記起來
+  on('fMeetAddr', 'oninput', e => { f.meetAddr = e.target.value; refreshMeetCal(); });
+  on('fMeetAt', 'oninput', e => { f.meetAt = e.target.value; refreshMeetCal(); });
+  on('fMeetName', 'oninput', e => { f.meetName = e.target.value; refreshMeetCal(); });
+  on('fMeetTel', 'oninput', e => { f.meetTel = e.target.value; refreshMeetCal(); });
   on('fRShop', 'oninput', e => f.rShop = e.target.value);
   on('fRAddr', 'oninput', e => f.rAddr = e.target.value);
   on('fRName', 'oninput', e => f.rName = e.target.value);
@@ -1374,8 +1526,13 @@ async function submitSale() {
   if (k === 'mini' && !f.selfPick && !f.cName.trim()) return alert('請填寫客戶名稱，或勾選「小賣自取」');
   if (k === 'dist' && f.dSendWay === SALES.HOME_DELIVERY && !f.rAddr.trim()) return alert('選擇宅配時請填寫宅配地址');
   if (k === 'online' && f.sendWay === SALES.HOME_DELIVERY && !f.rAddr.trim()) return alert('選擇宅配時請填寫宅配地址');
-  if (((k === 'mini' && f.pickup === '寄送' && byCode(f.sendWay)) || (k === 'dist' && byCode(f.dSendWay)))
-      && !String(f.shipCode || '').trim()) return alert('選了「收件者提供寄件代號」，請填寫客人給的寄件代號');
+  // 哪一種單別現在是「收件者提供寄件代號」／「店外面交」——三種單都要檢查
+  const wayNow = k === 'dist' ? f.dSendWay : f.sendWay;
+  const wayOn = k === 'dist' || k === 'online' || (k === 'mini' && f.pickup === '寄送');
+  if (wayOn && byCode(wayNow) && !String(f.shipCode || '').trim())
+    return alert('選了「收件者提供寄件代號」，請填寫客人給的寄件代號');
+  if (wayOn && byMeet(wayNow) && !String(f.meetAddr || '').trim())
+    return alert('選了「店外面交」，請填寫面交地址');
   const gone = items.filter(i => i.missing);
   if (gone.length) return alert('下面這些品項在庫存表裡找不到，為了避免扣錯庫存，這張單先不送出：\n\n'
     + gone.map(i => `・${i.name} ${i.spec}`).join('\n')
@@ -1471,8 +1628,11 @@ async function submitSale() {
       // 宅配沒有店名，超商沒有宅配地址——用不到的那一欄存 N/A，免得看起來像漏填
       const onHome = f.sendWay === SALES.HOME_DELIVERY;
       set('寄送方式', f.sendWay);
-      set('店名', onHome ? na : f.storeName.trim());
+      const onMeet = byMeet(f.sendWay), onCode = byCode(f.sendWay);
+      set('店名', onHome || onMeet || onCode ? na : f.storeName.trim());
       set('宅配地址', onHome ? f.rAddr.trim() : na);
+      if (onCode) set('寄件代碼', f.shipCode.trim());
+      setMeet(set, onMeet, na);
       // 前台只選收款方式，結帳狀態由系統推：已收貨款 → 已結帳
       const paidNow = f.collect === SALES.COLLECT_PAID;
       set('收款方式', f.collect);
@@ -1487,8 +1647,10 @@ async function submitSale() {
       const posting = f.pickup === '寄送';
       const code = posting && byCode(f.sendWay);      // 客人自己給寄件代號
       set('寄送方式', isSelf ? na : (posting ? f.sendWay : na));
-      set('店名', isSelf ? na : (posting && !code ? f.storeName.trim() : na));
+      const meet = posting && byMeet(f.sendWay);
+      set('店名', isSelf || meet ? na : (posting && !code ? f.storeName.trim() : na));
       if (code) set('寄件代碼', f.shipCode.trim());
+      setMeet(set, meet, na);
       // 收款方式決定結帳狀態：已收貨款＝錢到手了，其他兩種都還沒
       const mPaid = f.miniCollect === SALES.MINI_PAID;
       set('收款方式', f.miniCollect);
@@ -1501,11 +1663,15 @@ async function submitSale() {
     if (k === 'dist') {
       set('經銷名稱', f.distName); set('經銷聯絡電話', f.distTel.trim());
       const home = f.dSendWay === SALES.HOME_DELIVERY, code = byCode(f.dSendWay);
+      const meet = byMeet(f.dSendWay);
       set('寄送方式', f.dSendWay);
-      set('收貨門市', home || code ? SALES.NA : f.rShop.trim());
+      set('收貨門市', home || code || meet ? SALES.NA : f.rShop.trim());
       set('宅配地址', home && !code ? f.rAddr.trim() : SALES.NA);
       if (code) set('寄件代碼', f.shipCode.trim());
-      set('收貨人', f.rName.trim()); set('收貨人電話', f.rTel.trim());
+      // 面交的聯繫人和電話記在面交那四欄，收貨人那兩欄就不重複存
+      set('收貨人', meet ? SALES.NA : f.rName.trim());
+      set('收貨人電話', meet ? SALES.NA : f.rTel.trim());
+      setMeet(set, meet, SALES.NA);
     }
 
     await appendRow(SALE.titles[k], v);
@@ -1815,9 +1981,15 @@ function openSaleEdit(kind, r) {
     f.store = r['門市'] || CONFIG.STORES[0].label;
     f.payWay = SALES.PAYWAY.includes(r['收款方式']) ? r['收款方式'] : SALES.PAYWAY[0];
   }
+  // 面交四欄：N/A 要洗成空字串，不然輸入框裡會出現「N/A」
+  const un = v => (String(v || '') === SALES.NA ? '' : String(v || ''));
+  f.meetAddr = un(r['面交地址']);
+  f.meetAt = un(r['面交時間']).replace(' ', 'T');
+  f.meetName = un(r['面交聯繫人']);
+  f.meetTel = un(r['面交電話']);
   if (kind === 'online') {
     f.cName = r['客戶名稱'] || ''; f.tel = r['電話'] || '';
-    f.sendWay = SALES.ON_SEND_WAY.includes(r['寄送方式']) ? r['寄送方式'] : SALES.ON_SEND_WAY[0];
+    f.sendWay = onlineWays().includes(r['寄送方式']) ? r['寄送方式'] : SALES.ON_SEND_WAY[0];
     f.storeName = r['店名'] === SALES.NA ? '' : (r['店名'] || '');
     f.rAddr = r['宅配地址'] === SALES.NA ? '' : (r['宅配地址'] || '');
     f.collect = SALES.COLLECT.includes(r['收款方式']) ? r['收款方式']
@@ -1895,7 +2067,9 @@ function shopDiff(r, f, items) {
   if (k === 'online' || k === 'mini') { cmp('客戶名稱', r['客戶名稱'], f.cName.trim()); cmp('電話', r['電話'], f.tel.trim()); }
   if (k === 'online') {
     cmp('寄送方式', r['寄送方式'], f.sendWay);
-    if (f.sendWay === SALES.HOME_DELIVERY) cmp('宅配地址', r['宅配地址'], f.rAddr.trim());
+    if (byMeet(f.sendWay)) cmpMeet(cmp, r);
+    else if (byCode(f.sendWay)) cmp('寄件代碼', r['寄件代碼'], f.shipCode.trim());
+    else if (f.sendWay === SALES.HOME_DELIVERY) cmp('宅配地址', r['宅配地址'], f.rAddr.trim());
     else cmp('店名', r['店名'], f.storeName.trim());
     cmp('收款方式', r['收款方式'], f.collect);
     cmp('庫存處理', r['庫存狀態'],
@@ -1903,11 +2077,13 @@ function shopDiff(r, f, items) {
   }
   if (k === 'mini') {
     cmp('銷售小賣', r['銷售小賣'], f.miniName); cmp('取貨方式', r['取貨方式'], f.pickup);
+    if (f.pickup === '寄送' && byMeet(f.sendWay)) cmpMeet(cmp, r);
     cmp('銷售獎金', bonusOf(r), bonusNums().bonus);
     cmp('小賣自取', r['小賣自取'], f.selfPick ? '是' : '否');
   }
   if (k === 'dist') {
     cmp('經銷名稱', r['經銷名稱'], f.distName); cmp('寄送方式', r['寄送方式'], f.dSendWay);
+    if (byMeet(f.dSendWay)) cmpMeet(cmp, r);
     cmp('收貨人', r['收貨人'], f.rName.trim());
   }
   if (k !== 'shop') { cmp('運費', r['運費'], f.fee === '' ? '' : String(Number(f.fee) || 0)); }
@@ -2004,8 +2180,11 @@ async function submitShopEdit() {
       Object.assign(patch, {
         客戶名稱: f.cName.trim(), 電話: f.tel.trim(),
         寄送方式: f.sendWay,
-        店名: f.sendWay === SALES.HOME_DELIVERY ? SALES.NA : f.storeName.trim(),
+        店名: (f.sendWay === SALES.HOME_DELIVERY || byMeet(f.sendWay) || byCode(f.sendWay))
+          ? SALES.NA : f.storeName.trim(),
         宅配地址: f.sendWay === SALES.HOME_DELIVERY ? f.rAddr.trim() : SALES.NA,
+        寄件代碼: byCode(f.sendWay) ? f.shipCode.trim() : (r['寄件代碼'] || ''),
+        ...meetPatch(byMeet(f.sendWay)),
         收款方式: f.collect, 結帳狀態: nowPaid ? '已結帳' : '未結帳',
         結帳確認者: nowPaid ? (r['結帳確認者'] || userName() + ' ' + nowStr()) : '',
         結帳日: nowPaid ? (r['結帳日'] || f.payDate || f.date) : '',
@@ -2018,8 +2197,10 @@ async function submitShopEdit() {
         銷售小賣: f.miniName, 客戶名稱: f.cName.trim(), 小賣自取: isSelf ? '是' : '否',
         電話: isSelf ? SALES.NA : f.tel.trim(), 取貨方式: f.pickup,
         寄送方式: isSelf ? SALES.NA : (posting ? f.sendWay : SALES.NA),
-        店名: isSelf ? SALES.NA : (posting && !byCode(f.sendWay) ? f.storeName.trim() : SALES.NA),
-        收款方式: f.miniCollect
+        店名: (isSelf || byMeet(f.sendWay)) ? SALES.NA
+          : (posting && !byCode(f.sendWay) ? f.storeName.trim() : SALES.NA),
+        收款方式: f.miniCollect,
+        ...meetPatch(posting && byMeet(f.sendWay))
       });
       // 改成「已收貨款」才把結帳狀態拉成已結帳；已經在應收待結結過帳的單不要被改回未結帳
       const mPaid = f.miniCollect === SALES.MINI_PAID || String(r['結帳狀態']) === '已結帳';
@@ -2035,10 +2216,12 @@ async function submitShopEdit() {
       if (dcode) patch['寄件代碼'] = f.shipCode.trim();
       Object.assign(patch, {
         經銷名稱: f.distName, 經銷聯絡電話: f.distTel.trim(), 寄送方式: f.dSendWay,
-        收貨門市: home || dcode ? SALES.NA : f.rShop.trim(),
+        收貨門市: home || dcode || byMeet(f.dSendWay) ? SALES.NA : f.rShop.trim(),
         宅配地址: home && !dcode ? f.rAddr.trim() : SALES.NA,
-        收貨人: f.rName.trim(), 收貨人電話: f.rTel.trim(),
-        結帳狀態: f.payStatus, 結帳日: f.payDate
+        收貨人: byMeet(f.dSendWay) ? SALES.NA : f.rName.trim(),
+        收貨人電話: byMeet(f.dSendWay) ? SALES.NA : f.rTel.trim(),
+        結帳狀態: f.payStatus, 結帳日: f.payDate,
+        ...meetPatch(byMeet(f.dSendWay))
       });
     }
 
@@ -2372,6 +2555,7 @@ function pickCard(r, kind) {
     <div class="pick-sub">${sEsc(r['訂單日期'])} · ${sEsc(r.id)} · ${sEsc(r['負責業務'] || '—')}${r['電話'] ? ' · ' + sEsc(r['電話']) : ''}</div>
 
     <div class="pick-items">${itemLines(r)}</div>
+    ${meetLine(r)}
     ${discLine(r, '價格')}
     ${rowBackfill(r)
       ? `<div class="pick-flag back">📝 <b>銷售紀錄補登</b>　這張單<b>沒有扣庫存</b>，貨早就出去了，不用撿貨</div>`
@@ -2469,6 +2653,7 @@ function recvCard(r, kind) {
       ${r['電話'] && !na(r['電話']) ? '　·　' + sEsc(r['電話']) : ''}
       ${kind === 'dist' ? `　·　${sEsc((String(r['寄送方式']) === SALES.HOME_DELIVERY ? r['宅配地址'] : r['收貨門市']) || '')} ${sEsc(r['收貨人'] || '')} ${sEsc(r['收貨人電話'] || '')}` : ''}</div>
     <div class="rec-items">${itemLines(r)}</div>
+    ${meetLine(r)}
     ${discLine(r, '價格')}
     ${kind === 'mini' ? `<div class="bonus-line">銷貨金額 ${money(grossOf(r))}　−　銷售獎金 <b>${money(bonusOf(r))}</b>　→　應收貨款 <b>${money(owedOf(r))}</b></div>` : ''}
     ${r['備註'] ? `<div class="rec-meta">備註：${sEsc(r['備註'])}</div>` : ''}

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="app-version" content="5.7">
+<meta name="app-version" content="5.8">
 <title>西門龍門儀錶板</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -554,6 +554,26 @@ textarea{min-height:84px;resize:vertical}
   border-top:1px dashed var(--line);padding-top:8px}
 .nt-by{flex:1 1 auto;font-size:11.5px;color:var(--ink-3)}
 .nt-act{flex:0 0 auto;display:flex;gap:6px}
+
+/* ---------- 店外面交 ---------- */
+.meet-box{border:1px dashed #a5b4fc;background:#eef2ff;border-radius:12px;padding:12px}
+.meet-grid{display:grid;gap:9px;grid-template-columns:repeat(auto-fit,minmax(165px,1fr))}
+.meet-grid .wide{grid-column:1/-1}
+/* 手機上一欄一個：日期時間的輸入框在半格寬度會被切掉 */
+@media (max-width:460px){ .meet-grid{grid-template-columns:1fr} }
+.meet-grid label{display:block;font-size:11.5px;color:var(--ink-3);margin-bottom:3px;font-weight:700}
+.meet-grid input{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:#fff}
+.cal-btn{display:inline-flex;align-items:center;gap:6px;margin-top:10px;
+  text-decoration:none;border-color:#c7d2fe;color:#3730a3;background:#fff;font-weight:700}
+.cal-btn:hover{border-color:#818cf8;background:#f5f3ff}
+/* 卡片上那一塊面交資訊 */
+.meet-line{display:flex;flex-direction:column;gap:3px;background:#eef2ff;
+  border:1px solid #c7d2fe;border-radius:10px;padding:9px 11px;margin-bottom:9px;
+  font-size:13px;color:#3730a3}
+.meet-line .mt-tag{font-weight:800}
+.meet-line .mt-at{font-weight:800;font-size:14px;font-variant-numeric:tabular-nums}
+.meet-line .mt-row{overflow-wrap:anywhere}
+.meet-line .cal-btn{align-self:flex-start;margin-top:6px}
 .stage-bar .stg b.sm{flex:1 1 100%;font-size:11.5px;font-weight:700;color:var(--ink-2);
   font-variant-numeric:tabular-nums}
 .stage-bar .stg.on b.sm{color:var(--brand)}
@@ -885,7 +905,7 @@ textarea{min-height:84px;resize:vertical}
 <div id="toastHost"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="app.js?v=5.7"></script>
-<script src="sales.js?v=5.7"></script>
+<script src="app.js?v=5.8"></script>
+<script src="sales.js?v=5.8"></script>
 </body>
 </html>
